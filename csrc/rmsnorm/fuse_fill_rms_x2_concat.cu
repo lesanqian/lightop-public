@@ -8,6 +8,8 @@
 #include <ATen/AccumulateType.h>
 #include <THC/THCDeviceUtils.cuh>
 #include <ATen/Dispatch.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #ifndef USE_ROCM
   #include <cub/cub.cuh>
 #else
@@ -15,9 +17,6 @@
 #endif
 
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
 template <typename T, int N> struct alignas(sizeof(T) * N) Vector {
@@ -42,7 +41,7 @@ AT_DISPATCH_SWITCH(TYPE, NAME, VLLM_DISPATCH_CASE_FLOATING_TYPES(__VA_ARGS__))
     AT_DISPATCH_CASE(at::ScalarType::BFloat16, __VA_ARGS__)
 
         
-    template <typename T,int reducesize=C10_WARP_SIZE>
+    template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
     __inline__ __device__ T WarpReduceSum_NEW(T val) {
     #pragma unroll
       for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -53,7 +52,8 @@ AT_DISPATCH_SWITCH(TYPE, NAME, VLLM_DISPATCH_CASE_FLOATING_TYPES(__VA_ARGS__))
     
     template <typename T,int block_size=512>
     __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
-      constexpr int share_size=block_size/C10_WARP_SIZE;
+      constexpr int share_size=block_size / C10_WARP_SIZE;
+      constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
       val = WarpReduceSum_NEW<T>(val);
       if constexpr(block_size==C10_WARP_SIZE)
       {
@@ -114,8 +114,9 @@ AT_DISPATCH_SWITCH(TYPE, NAME, VLLM_DISPATCH_CASE_FLOATING_TYPES(__VA_ARGS__))
         }   
         else  
         { 
-            constexpr int share_size=block_size/C10_WARP_SIZE;
-            __shared__ T_ACC val_shared[share_size];
+            constexpr int share_size=block_size / C10_WARP_SIZE;
+            constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+            __shared__ T_ACC val_shared[share_size_alloc];
             __shared__ T_ACC s_rstd;
             T_ACC val=0;
             int j=threadIdx.x;
@@ -155,8 +156,9 @@ AT_DISPATCH_SWITCH(TYPE, NAME, VLLM_DISPATCH_CASE_FLOATING_TYPES(__VA_ARGS__))
       else
       {
         const int i = blockIdx.x - num_tokens_inputs_embeds;  
-        constexpr int share_size=block_size/C10_WARP_SIZE;
-        __shared__ T_ACC val_shared[share_size];
+        constexpr int share_size=block_size / C10_WARP_SIZE;
+        constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+        __shared__ T_ACC val_shared[share_size_alloc];
         __shared__ T_ACC s_rstd;
         T_ACC val=0;
         int j=threadIdx.x;

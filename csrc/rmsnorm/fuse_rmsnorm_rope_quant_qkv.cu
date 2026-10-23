@@ -12,6 +12,8 @@
 #include <ATen/AccumulateType.h>
 #include <THC/THCDeviceUtils.cuh>
 #include <ATen/Dispatch.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
 template <typename T, int N> struct alignas(sizeof(T) * N) Vector {
@@ -191,7 +193,7 @@ inline __device__ uint16_t float_to_fp8e5m2_x2(float a, float b)
 
   
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceSum_NEW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -202,7 +204,8 @@ __inline__ __device__ T WarpReduceSum_NEW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceSum_NEW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -465,7 +468,7 @@ __global__ void rmsnorm_rope_quant_qkv_kernel(
       for (int ii = 0; ii < Vec; ii++) {
         val += static_cast<T_ACC>(input_vec[ii]) * static_cast<T_ACC>(input_vec[ii]);
       }
-      val = BlockReduceSum_NEW<T_ACC,C10_WARP_SIZE>(val,nullptr);
+      val = BlockReduceSum_NEW<T_ACC,C10_WARP_SIZE_UPPER_BOUND>(val,nullptr);
       if(laneid == 0) {
         s_rstd = c10::cuda::compat::rsqrt(val / kv_c_dim + epsilon);
       }
@@ -520,7 +523,7 @@ __global__ void rmsnorm_rope_quant_qkv_kernel(
       float max_abs_value = 1e-10f;
       max_abs_value = fmaxf(max_abs_value, fabs(static_cast<T_ACC>(input_vec[0])));
       max_abs_value = fmaxf(max_abs_value, fabs(static_cast<T_ACC>(input_vec[1])));
-      max_abs_value = WarpReduceMax_ROW<T_ACC,C10_WARP_SIZE>(max_abs_value);
+      max_abs_value = WarpReduceMax_ROW<T_ACC,C10_WARP_SIZE_UPPER_BOUND>(max_abs_value);
       float fp8_max = kv_dtype == 1 ? 448.0f : 57344.0f;
       float scale_x = max_abs_value / fp8_max;
       scale_x = __shfl(scale_x, 0);
@@ -564,6 +567,7 @@ __global__ void rmsnorm_rope_quant_qkv_kernel(
 
     const int bs = q_pe.size(0);
     const int num_head = q_pe.size(1);
+    const int warp_size = lightop::compat::warp_size();
     constexpr int q_c_dim = 128;
     constexpr int rot_dim = 64;
     const int q_stride_head = q_pe.stride(1);
@@ -571,26 +575,26 @@ __global__ void rmsnorm_rope_quant_qkv_kernel(
     // constexpr int num_warp_per_block = 4;
     constexpr int num_warp_per_block = 4;
     constexpr int Vec = 8;
-    constexpr int num_head_per_warp = (C10_WARP_SIZE * Vec) / rot_dim;  // 512 / 64 = 8
-    constexpr int num_head_per_block = num_head_per_warp * num_warp_per_block;  // 8 * 4 = 32
+    const int num_head_per_warp = (warp_size * Vec) / rot_dim;  // 512 / 64 = 8
+    const int num_head_per_block = num_head_per_warp * num_warp_per_block;  // 8 * 4 = 32
     const int block_per_token = (num_head + num_head_per_block - 1) / num_head_per_block;  // 向上取整
     const int q_grid_x = block_per_token * bs;  // 4 * bs
     // const int q_c_grid_x = q_grid_x*2;
-    const int block_x = num_warp_per_block * C10_WARP_SIZE;  // 128
+    const int block_x = num_warp_per_block * warp_size;  // 128
     // Quant(Q_C)    VecQC = 2, 一个warp处理一个head，一个block处理4个head。 一个token需要 num_head / 4 个block。总共需要 bs * num_head / 4 个block
     const int q_c_grid_x = bs * num_head / 4;
     
     // 计算ROPE(K)grid和block尺寸
     constexpr int kv_c_dim = 512;
     const int k_stride_head = k_pe.stride(0);
-    constexpr int element_per_warp = C10_WARP_SIZE * Vec;
-    constexpr int k_token_per_warp = element_per_warp / (rot_dim);  // 8
-    constexpr int k_token_per_block = k_token_per_warp * num_warp_per_block; // 32
+    const int element_per_warp = warp_size * Vec;
+    const int k_token_per_warp = element_per_warp / rot_dim;  // 8
+    const int k_token_per_block = k_token_per_warp * num_warp_per_block; // 32
     const int k_grid_x = (bs + k_token_per_block - 1) / k_token_per_block; // (32 + 32 - 1) / 32 = 1
     
     // 计算RMS(K)grid和block尺寸
-    constexpr int k_rms_token_per_warp = element_per_warp / (kv_c_dim);// 1
-    constexpr int k_rms_token_per_block = k_rms_token_per_warp * num_warp_per_block; // 4
+    const int k_rms_token_per_warp = element_per_warp / kv_c_dim;// 1
+    const int k_rms_token_per_block = k_rms_token_per_warp * num_warp_per_block; // 4
     const int k_rms_grid_x = (bs + k_rms_token_per_block - 1) / k_rms_token_per_block; // (32 + 32 - 1) / 32 = 1
     // 检查KV_CACHE相关参数
     const int num_kv_cache_blocks = kv_cache.size(0);

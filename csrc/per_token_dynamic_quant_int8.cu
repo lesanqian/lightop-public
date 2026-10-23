@@ -6,15 +6,14 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <ATen/native/cuda/MemoryAccess.cuh>
 #include <ATen/AccumulateType.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
 #include <cmath>
 // #include "reduce.h"
 
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 
 namespace at {
 namespace native {
@@ -62,7 +61,7 @@ static inline __device__ int8_t float_to_int8_rn(float x) {
 #endif
 }
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceMax_ROW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -73,7 +72,8 @@ __inline__ __device__ T WarpReduceMax_ROW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceMax_ROW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceMax_ROW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -108,7 +108,9 @@ __global__ void per_token_dynamic_quant_int8_kernel(
     int tid = threadIdx.x;
 
     constexpr int share_size = block_size / C10_WARP_SIZE;
-    __shared__ float val_shared[share_size];
+
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float val_shared[share_size_alloc];
     using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;
     using VecInt8Type = at::native::memory::aligned_vector<int8_t, VEC>;
     using VecFloatType = at::native::memory::aligned_vector<float, VEC>;
@@ -276,7 +278,7 @@ void launch_per_token_dynamic_quant_int8_bf16_k128_wave(
     int64_t num_tokens,
     cudaStream_t stream) {
     constexpr int threads = 512;
-    constexpr int rows_per_block = (threads / C10_WARP_SIZE) * 4;
+    constexpr int rows_per_block = (threads / C10_WARP_SIZE_UPPER_BOUND) * 4;
     const int64_t blocks =
         (num_tokens + rows_per_block - 1) / rows_per_block;
     per_token_dynamic_quant_int8_bf16_k128_quarter_wave_kernel<rows_per_block>
@@ -346,7 +348,9 @@ __global__ void per_token_dynamic_quant_int8_large_hidden_kernel(
     const int64_t row_offset = token_idx * hidden_size;
 
     constexpr int share_size = block_size / C10_WARP_SIZE;
-    __shared__ float reduce_shared[share_size];
+
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float reduce_shared[share_size_alloc];
     __shared__ float token_absmax;
 
     using InputVec = at::native::memory::aligned_vector<scalar_t, VEC>;

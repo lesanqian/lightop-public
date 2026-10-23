@@ -8,6 +8,8 @@
 #include <c10/cuda/CUDAMathCompat.h>
 #include <ATen/AccumulateType.h>
 #include <THC/THCDeviceUtils.cuh>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 #ifndef USE_ROCM
   #include <cub/cub.cuh>
@@ -16,9 +18,6 @@
 #endif
 
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 
 template<typename scalar_t> 
 static __device__ inline void from_float(scalar_t &out ,float f){
@@ -125,7 +124,7 @@ __global__ void qk_rms_norm_kernel(
 namespace at{
 namespace native{
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceSum_NEW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -145,7 +144,8 @@ __inline__ __device__ T SubWarpReduceSum(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceSum_NEW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -254,7 +254,8 @@ __global__ void fused_qk_rms_kernel_opt(
     int total_tasks)
 {
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size > 0 ? share_size : 1];
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc > 0 ? share_size_alloc : 1];
   __shared__ T_ACC s_rstd;
 
   int i = blockIdx.x;

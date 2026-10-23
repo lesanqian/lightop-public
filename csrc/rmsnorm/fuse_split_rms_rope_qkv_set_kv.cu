@@ -13,6 +13,7 @@
 #include <ATen/cuda/detail/TensorInfo.cuh>
 #include <ATen/cuda/CUDAGraphsUtils.cuh>
 #include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <hiprand_kernel.h>
 #include <ATen/native/TensorIterator.h>
 #include <ATen/native/cuda/Loops.cuh>
@@ -258,7 +259,7 @@ template <int N> using IntConst = std::integral_constant<int, N>;
 namespace at{
 namespace native{
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceSum_NEW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -269,7 +270,8 @@ __inline__ __device__ T WarpReduceSum_NEW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceSum_NEW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -293,8 +295,9 @@ __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
 template <typename T_ACC, typename scalar_t,int Vec=4,int block_size=512, int NUM_QK_MUL, int num_warp, bool pipeline, bool is_q>
 inline __device__ void apply_rmsnorm(scalar_t* input,scalar_t* gamma, int cols,T_ACC eps, scalar_t* intput_vec)
 {
-    constexpr int share_size=block_size/64;
-    __shared__ T_ACC val_shared[share_size];
+    constexpr int share_size = block_size / C10_WARP_SIZE;
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ T_ACC val_shared[share_size_alloc];
     __shared__ T_ACC s_rstd[num_warp];
     T_ACC val=0;
     int tid;
@@ -317,8 +320,8 @@ inline __device__ void apply_rmsnorm(scalar_t* input,scalar_t* gamma, int cols,T
         }
     }
 
-    int tid_in_land = tid % 64;
-    int land = tid / 64;
+    int tid_in_land = tid % C10_WARP_SIZE;
+    int land = tid / C10_WARP_SIZE;
     val = WarpReduceSum_NEW<T_ACC>(val);
     // __syncthreads();
     if (tid_in_land == 0) s_rstd[land]=c10::cuda::compat::rsqrt(val/cols + eps);
@@ -337,8 +340,9 @@ inline __device__ void apply_rmsnorm(scalar_t* input,scalar_t* gamma, int cols,T
 template <typename T_ACC, typename scalar_t,int Vec=4,int block_size=512, int num_warp, bool pipeline, bool is_q>
 inline __device__ void apply_rmsnorm_residual(scalar_t* input,scalar_t* gamma,scalar_t* residual,int cols,T_ACC eps, scalar_t* intput_vec)
 {
-    constexpr int share_size=block_size/64;
-    __shared__ T_ACC val_shared[share_size];
+    constexpr int share_size = block_size / C10_WARP_SIZE;
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ T_ACC val_shared[share_size_alloc];
     __shared__ T_ACC s_rstd[num_warp];
     T_ACC val=0;
     int tid;
@@ -365,8 +369,8 @@ inline __device__ void apply_rmsnorm_residual(scalar_t* input,scalar_t* gamma,sc
         }
     }
 
-    int tid_in_land = tid % 64;
-    int land = tid / 64;
+    int tid_in_land = tid % C10_WARP_SIZE;
+    int land = tid / C10_WARP_SIZE;
     val = WarpReduceSum_NEW<T_ACC>(val);
     // __syncthreads();
     if (tid_in_land == 0) s_rstd[land]=c10::cuda::compat::rsqrt(val/cols + eps);

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce.h"
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 namespace at {
 namespace native {
@@ -345,6 +347,7 @@ Tensor gemm_w8_a16_fp8_colmajor(const Tensor& x,const Tensor& weight,const Tenso
     // std::cout<<"weight.strides()="<<weight.strides()[0]<<","<<weight.strides()[1]<<std::endl;
     Tensor ret=at::empty(size,x.options());
     auto stream = at::cuda::getCurrentCUDAStream();
+    const int warp_size = lightop::compat::warp_size();
     static float* splitk_work_space = nullptr;
     static int* semaphores = nullptr;
     if(splitk_work_space == nullptr){
@@ -365,11 +368,11 @@ Tensor gemm_w8_a16_fp8_colmajor(const Tensor& x,const Tensor& weight,const Tenso
                 int lds_size=NumWarps/2*NPerBlock*m*sizeof(float);
                 if(W8A16_PRINT_PARAM)std::cout<<"blocks="<<blocks<<" NumWarps="<<NumWarps<<" NPerBlock="<<NPerBlock<<" splitk="<<splitk<<std::endl;
                 if(splitk>1){
-                    gemm_w8_a16_kernel_with_splitk_colmajor<scalar_t,NumWarps,NPerBlock><<<dim3(splitk,blocks),NumWarps*C10_WARP_SIZE,lds_size,stream>>>
+                    gemm_w8_a16_kernel_with_splitk_colmajor<scalar_t,NumWarps,NPerBlock><<<dim3(splitk,blocks),NumWarps*warp_size,lds_size,stream>>>
                             ((scalar_t*)x.data_ptr(),(fp8*)weight.data_ptr(),(scalar_t*)ret.data_ptr(),(float*)scale_n.data_ptr(),splitk_work_space,semaphores,m,n,k,splitk);
                 }
                 else{
-                    gemm_w8_a16_kernel_colmajor<scalar_t,NumWarps,NPerBlock><<<dim3(blocks),NumWarps*C10_WARP_SIZE,lds_size,stream>>>
+                    gemm_w8_a16_kernel_colmajor<scalar_t,NumWarps,NPerBlock><<<dim3(blocks),NumWarps*warp_size,lds_size,stream>>>
                         ((scalar_t*)x.data_ptr(),(fp8*)weight.data_ptr(),(scalar_t*)ret.data_ptr(),(float*)scale_n.data_ptr(),m,n,k); 
                 }
             });

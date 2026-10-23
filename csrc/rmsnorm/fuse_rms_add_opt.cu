@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <cmath>
 #include <type_traits>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 #ifndef USE_ROCM
   #include <cub/cub.cuh>
@@ -19,9 +21,6 @@
   #include <hipcub/hipcub.hpp>
 #endif
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 
 template<typename scalar_t>
 static __device__ inline float to_float(scalar_t in){
@@ -232,7 +231,7 @@ fused_add_rms_norm_kernel(
 namespace at{
 namespace native{
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceSum_NEW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -243,7 +242,8 @@ __inline__ __device__ T WarpReduceSum_NEW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceSum_NEW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -286,9 +286,10 @@ __global__ void rms_kernel_small_hidden_multi_token(
   constexpr int Vec = 8;
   constexpr int TokensPerBlock = BlockSize / ThreadsPerToken;
   static_assert(HiddenSize == ThreadsPerToken * Vec);
-  static_assert(ThreadsPerToken <= C10_WARP_SIZE);
-  static_assert(C10_WARP_SIZE % ThreadsPerToken == 0);
-  static_assert(BlockSize % C10_WARP_SIZE == 0);
+  // 上界在 host 与 device 两个编译 pass 上取值一致，无需再做设备侧保护
+  static_assert(ThreadsPerToken <= C10_WARP_SIZE_UPPER_BOUND);
+  static_assert(C10_WARP_SIZE_UPPER_BOUND % ThreadsPerToken == 0);
+  static_assert(BlockSize % C10_WARP_SIZE_UPPER_BOUND == 0);
 
   const int lane = threadIdx.x % ThreadsPerToken;
   const int token_in_block = threadIdx.x / ThreadsPerToken;
@@ -349,9 +350,10 @@ __global__ void fused_add_rms_kernel_small_hidden_multi_token(
   constexpr int Vec = 8;
   constexpr int TokensPerBlock = BlockSize / ThreadsPerToken;
   static_assert(HiddenSize == ThreadsPerToken * Vec);
-  static_assert(ThreadsPerToken <= C10_WARP_SIZE);
-  static_assert(C10_WARP_SIZE % ThreadsPerToken == 0);
-  static_assert(BlockSize % C10_WARP_SIZE == 0);
+  // 上界在 host 与 device 两个编译 pass 上取值一致，无需再做设备侧保护
+  static_assert(ThreadsPerToken <= C10_WARP_SIZE_UPPER_BOUND);
+  static_assert(C10_WARP_SIZE_UPPER_BOUND % ThreadsPerToken == 0);
+  static_assert(BlockSize % C10_WARP_SIZE_UPPER_BOUND == 0);
 
   const int lane = threadIdx.x % ThreadsPerToken;
   const int token_in_block = threadIdx.x / ThreadsPerToken;
@@ -486,7 +488,8 @@ __global__ __launch_bounds__(Threads) void fused_add_rms_kernel_fp32_tiled(
   const int lane = threadIdx.x % C10_WARP_SIZE;
   const int warp = threadIdx.x / C10_WARP_SIZE;
   constexpr int Warps = Threads / C10_WARP_SIZE;
-  __shared__ float partial[Warps];
+  constexpr int WarpsAlloc = Threads / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float partial[WarpsAlloc];
   __shared__ float rstd;
   const int64_t base = static_cast<int64_t>(blockIdx.x) * Hidden;
 #pragma unroll
@@ -534,8 +537,9 @@ __global__ __launch_bounds__(Threads) void fused_add_rms_kernel_fp32_tiled(
 template <typename scalar_t,typename T_ACC,int Vec=4,int block_size=512, bool IS_GEMMA=false, bool APPLY_CLAMP=false>
 __global__ void fused_add_rms_kernel_opt(scalar_t* input,scalar_t* residual,scalar_t* gamma,int cols,T_ACC eps, int num_tokens,T_ACC limit)
 {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
   using LoadT = at::native::memory::aligned_vector<scalar_t, Vec>;
   int i=blockIdx.x;
@@ -585,8 +589,9 @@ __global__ void fused_add_rms_kernel_opt(scalar_t* input,scalar_t* residual,scal
 template <typename scalar_t,typename T_ACC,int Vec=4,int block_size=512, bool IS_GEMMA=false, bool APPLY_CLAMP=false>
 __global__ void fused_rms_kernel_opt(scalar_t* input,scalar_t* output,scalar_t* gamma,int cols,T_ACC eps,int num_tokens,T_ACC limit)
 {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
 
   int i=blockIdx.x;
@@ -636,8 +641,9 @@ __global__ void rms_kernel_opt_optional_weight(
     int cols,
     T_ACC eps,
     int num_tokens) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
   using LoadT = at::native::memory::aligned_vector<scalar_t, Vec>;
 

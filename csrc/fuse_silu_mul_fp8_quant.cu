@@ -4,6 +4,8 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/all.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <ATen/native/cuda/MemoryAccess.cuh>
 
 #include <cmath>
@@ -283,7 +285,8 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1(
   for(; token_idx < num_local_tokens ;token_idx += gridDim.x){
   // for(; token_idx < num_tokens ;token_idx += gridDim.x){
     constexpr int share_size=block_size / C10_WARP_SIZE;
-    __shared__ float val_shared[share_size];
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float val_shared[share_size_alloc];
     using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;
     using VecInt8Type = at::native::memory::aligned_vector<uint8_t, VEC>;
 
@@ -376,7 +379,9 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_gernel(
     const int64_t output_offset = token_idx * d;
 
     constexpr int share_size = block_size / C10_WARP_SIZE;
-    __shared__ float shared_mem[share_size];
+
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float shared_mem[share_size_alloc];
 
     float row_max = 0.0f;
     for (int64_t idx = threadIdx.x; idx < d; idx += blockDim.x) {
@@ -441,7 +446,9 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_new(
     }
 
     constexpr int share_size=block_size / C10_WARP_SIZE;
-    __shared__ float val_shared[share_size];
+
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float val_shared[share_size_alloc];
     using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;
     using VecInt8Type = at::native::memory::aligned_vector<uint8_t, VEC>;
 
@@ -529,7 +536,9 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_new_gernel(
     const int64_t output_offset = token_idx * d;
 
     constexpr int share_size = block_size / C10_WARP_SIZE;
-    __shared__ float shared_mem[share_size];
+
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float shared_mem[share_size_alloc];
 
     float row_max = 0.0f;
     for (int64_t idx = threadIdx.x; idx < d; idx += blockDim.x) {
@@ -593,7 +602,8 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_one(
     if(token_idx >= num_local_tokens_tensor[0] * topK)  return;
   }
     constexpr int share_size=block_size / C10_WARP_SIZE;
-    __shared__ float val_shared[share_size];
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float val_shared[share_size_alloc];
     using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;
     using VecInt8Type = at::native::memory::aligned_vector<uint8_t, VEC>;
 
@@ -679,7 +689,9 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_one_gernel(
   const int64_t output_offset = token_idx * d;
 
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ float shared_mem[share_size];
+
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float shared_mem[share_size_alloc];
 
   float row_max = 0.0f;
   for (int64_t idx = threadIdx.x; idx < d; idx += blockDim.x) {
@@ -749,7 +761,8 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_with_limit(
   for(; token_idx < num_local_tokens ;token_idx += gridDim.x){
   // for(; token_idx < num_tokens ;token_idx += gridDim.x){
     constexpr int share_size=block_size / C10_WARP_SIZE;
-    __shared__ float val_shared[share_size];
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float val_shared[share_size_alloc];
     using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;
     using VecInt8Type = at::native::memory::aligned_vector<uint8_t, VEC>;
 
@@ -842,7 +855,9 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_gernel_with_limit(
     const int64_t output_offset = token_idx * d;
 
     constexpr int share_size = block_size / C10_WARP_SIZE;
-    __shared__ float shared_mem[share_size];
+
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float shared_mem[share_size_alloc];
 
     float row_max = 0.0f;
     for (int64_t idx = threadIdx.x; idx < d; idx += blockDim.x) {
@@ -907,7 +922,9 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_new_with_limit(
     }
 
     constexpr int share_size=block_size / C10_WARP_SIZE;
-    __shared__ float val_shared[share_size];
+
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float val_shared[share_size_alloc];
     using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;
     using VecInt8Type = at::native::memory::aligned_vector<uint8_t, VEC>;
 
@@ -995,7 +1012,9 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_new_gernel_with_limit(
     const int64_t output_offset = token_idx * d;
 
     constexpr int share_size = block_size / C10_WARP_SIZE;
-    __shared__ float shared_mem[share_size];
+
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float shared_mem[share_size_alloc];
 
     float row_max = 0.0f;
     for (int64_t idx = threadIdx.x; idx < d; idx += blockDim.x) {
@@ -1060,7 +1079,8 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_one_with_limit(
     if(token_idx >= num_local_tokens_tensor[0] * topK)  return;
   }
     constexpr int share_size=block_size / C10_WARP_SIZE;
-    __shared__ float val_shared[share_size];
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float val_shared[share_size_alloc];
     using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;
     using VecInt8Type = at::native::memory::aligned_vector<uint8_t, VEC>;
 
@@ -1150,7 +1170,9 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_one_with_limit_chunked(
   }
 
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ float val_shared[share_size];
+
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float val_shared[share_size_alloc];
   using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;
   using VecInt8Type = at::native::memory::aligned_vector<uint8_t, VEC>;
 
@@ -1250,7 +1272,9 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_one_with_limit_chunked_exact_e
   }
 
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ float val_shared[share_size];
+
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float val_shared[share_size_alloc];
   using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;
   using VecInt8Type = at::native::memory::aligned_vector<uint8_t, VEC>;
 
@@ -1346,7 +1370,9 @@ act_and_mul_fp8_quant_kernel_opt1_one_with_limit_chunked_exact_e4m3_twopass(
   }
 
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ float val_shared[share_size];
+
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float val_shared[share_size_alloc];
   using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;
   using VecInt8Type = at::native::memory::aligned_vector<uint8_t, VEC>;
 
@@ -1542,7 +1568,9 @@ act_and_mul_fp8_quant_kernel_opt1_one_with_limit_chunked_exact_e4m3_bf16pack(
   }
 
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ float val_shared[share_size];
+
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float val_shared[share_size_alloc];
   using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;
   using VecInt8Type = at::native::memory::aligned_vector<uint8_t, VEC>;
 
@@ -1623,7 +1651,9 @@ __global__ void act_and_mul_fp8_quant_kernel_opt1_one_gernel_with_limit(
   const int64_t output_offset = token_idx * d;
 
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ float shared_mem[share_size];
+
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float shared_mem[share_size_alloc];
 
   float row_max = 0.0f;
   for (int64_t idx = threadIdx.x; idx < d; idx += blockDim.x) {

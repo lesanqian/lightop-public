@@ -3,6 +3,8 @@
 
 #include <cuda_fp16.h>
 #include <vector>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include "scaled_upper_triang_masked_softmax.cuh"
 
 using namespace std;
@@ -140,7 +142,8 @@ int get_batch_per_block(int query_seq_len, int key_seq_len, int batches, int att
     int log2_elements = log2_ceil(key_seq_len);
     const int next_power_of_two = 1 << log2_elements;
 
-    int warp_size = (next_power_of_two < C10_WARP_SIZE) ? next_power_of_two : C10_WARP_SIZE;
+    const int device_warp_size = lightop::compat::warp_size();
+    int warp_size = (next_power_of_two < device_warp_size) ? next_power_of_two : device_warp_size;
     int batches_per_warp = (next_power_of_two <= 128) ? 2 : 1;
 
     constexpr int threads_per_block = 128;

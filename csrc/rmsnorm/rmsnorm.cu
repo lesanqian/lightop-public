@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rmsnorm.h"
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 namespace at{
 namespace native{
@@ -64,8 +66,9 @@ __global__ void rmsnorm_forward_kernel_fast(scalar_t* input,scalar_t* ret,float*
   int threadidx=threadIdx.x;
   int block_cols=blockidx*cols;
   using T_ACC = acc_type<scalar_t, true>;
-  constexpr int sharesize=blocksize/C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[sharesize];
+  constexpr int sharesize=blocksize / C10_WARP_SIZE;
+  constexpr int sharesize_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[sharesize_alloc];
   __shared__ T_ACC s_rstd;
   
   using VecTpye=memory::aligned_vector<scalar_t, VEC>;

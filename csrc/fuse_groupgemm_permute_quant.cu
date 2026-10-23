@@ -6,6 +6,8 @@
 #include <ATen/cuda/detail/IndexUtils.cuh>
 #include <ATen/cuda/detail/TensorInfo.cuh>
 #include <c10/cuda/CUDAMathCompat.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
@@ -135,7 +137,7 @@ namespace native{
         const int lid = threadIdx.x % C10_WARP_SIZE;
         const int wid = threadIdx.x / C10_WARP_SIZE;
         const int block_size=blockDim.x;
-        const int share_size=block_size/C10_WARP_SIZE;
+        const int share_size=block_size / C10_WARP_SIZE;
         val = WarpReduceSum(val);
         if(block_size==C10_WARP_SIZE)return val;
         if (lid == 0&&wid<share_size) {
@@ -295,7 +297,7 @@ __global__ void __launch_bounds__(1024) fuse_permute_tokens_quant_kernel_vec(
     constexpr int THREAD_WORK_SIZE = block_size * VEC;
     constexpr int NUM_LOOPS = (num + THREAD_WORK_SIZE - 1) / THREAD_WORK_SIZE;
 
-    __shared__ float val_shared[block_size / C10_WARP_SIZE];
+    __shared__ float val_shared[block_size / C10_WARP_SIZE_UPPER_BOUND];
     __shared__ float s_block_wide_max;
 
     const int token_idx = blockIdx.x;

@@ -4,6 +4,8 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/native/cuda/MemoryAccess.cuh>
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <torch/all.h>
 
 #include <algorithm>
@@ -134,7 +136,9 @@ __global__ void swiglu_clamp_quant_kernel(
   using OutputVec = at::native::memory::aligned_vector<int8_t, vec>;
 
   constexpr int shared_size = block_size / C10_WARP_SIZE;
-  __shared__ float reduce_scratch[shared_size];
+
+  constexpr int shared_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float reduce_scratch[shared_size_alloc];
   __shared__ float row_absmax;
 
   for (; token_idx < token_end; token_idx += token_stride) {
@@ -228,7 +232,9 @@ __global__ void swiglu_clamp_quant_scalar_kernel(
   }
 
   constexpr int shared_size = block_size / C10_WARP_SIZE;
-  __shared__ float reduce_scratch[shared_size];
+
+  constexpr int shared_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float reduce_scratch[shared_size_alloc];
   __shared__ float row_absmax;
 
   for (; token_idx < token_end; token_idx += token_stride) {

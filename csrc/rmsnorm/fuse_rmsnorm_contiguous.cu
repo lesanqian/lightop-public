@@ -11,6 +11,8 @@
 #include <ATen/AccumulateType.h>
 #include <THC/THCDeviceUtils.cuh>
 #include <ATen/Dispatch.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 #ifndef USE_ROCM
   #include <cub/cub.cuh>
@@ -18,9 +20,6 @@
   #include <hipcub/hipcub.hpp>
 #endif
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 namespace at{
 namespace native{
 
@@ -62,7 +61,7 @@ __global__ void rms_norm_kernel(
   }
 }
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceSum_NEW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -73,7 +72,8 @@ __inline__ __device__ T WarpReduceSum_NEW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceSum_NEW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -96,8 +96,9 @@ __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
 template <typename scalar_t,typename T_ACC,int Vec=4,int block_size=512>
 __global__ void fused_rms_kernel_contiguous(scalar_t* input,scalar_t* output,scalar_t* gamma,int cols,T_ACC eps,int stride)
 {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
   T_ACC val=0;
   int i=blockIdx.x;

@@ -11,6 +11,8 @@
 #include <ATen/AccumulateType.h>
 #include <THC/THCDeviceUtils.cuh>
 #include <ATen/Dispatch.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
 template <typename T, int N> struct alignas(sizeof(T) * N) Vector {
@@ -24,9 +26,6 @@ template <typename T, int N> struct alignas(sizeof(T) * N) Vector {
 #endif
 
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 
 namespace at{
 namespace native{
@@ -144,7 +143,7 @@ static inline __device__ int8_t float_to_int8_rn(float x) {
 #endif
 }
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceMax_ROW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -157,7 +156,7 @@ __inline__ __device__ T WarpReduceMax_ROW(T val) {
   return val;
 }
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceSum_NEW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -168,7 +167,8 @@ __inline__ __device__ T WarpReduceSum_NEW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceSum_NEW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -380,7 +380,7 @@ __global__ void rms_rope_int8quant_kernel(
       for (int ii = 0; ii < Vec; ii++) {
         val += static_cast<T_ACC>(input_vec[ii]) * static_cast<T_ACC>(input_vec[ii]);
       }
-      val = BlockReduceSum_NEW<T_ACC,C10_WARP_SIZE>(val,nullptr);
+      val = BlockReduceSum_NEW<T_ACC,C10_WARP_SIZE_UPPER_BOUND>(val,nullptr);
       if(laneid == 0) {
         s_rstd = c10::cuda::compat::rsqrt(val / kv_c_dim + epsilon);
       }
@@ -427,7 +427,7 @@ __global__ void rms_rope_int8quant_kernel(
         local_max = fmaxf(local_max, fabs(static_cast<float>(input_vec[ii])));
       }
       
-      float warp_max = WarpReduceMax_ROW<float, C10_WARP_SIZE>(local_max);
+      float warp_max = WarpReduceMax_ROW<float, C10_WARP_SIZE_UPPER_BOUND>(local_max);
 #if defined(USE_ROCM)
       warp_max = __shfl(warp_max, 0);
 #else
@@ -472,6 +472,7 @@ __global__ void rms_rope_int8quant_kernel(
     TORCH_CHECK(q_pe.dim() == 3, "q_pe must be 3D tensor [bs, num_head, rot_dim]");
     const int bs = q_pe.size(0);
     const int num_head = q_pe.size(1);
+    const int warp_size = lightop::compat::warp_size();
     constexpr int q_c_dim = 128;
     constexpr int rot_dim = 64;
     const int q_stride_head = q_pe.stride(1);
@@ -483,11 +484,11 @@ __global__ void rms_rope_int8quant_kernel(
     // 计算ROPE(Q)
     constexpr int num_warp_per_block = 4;
     constexpr int Vec = 8;
-    constexpr int num_head_per_warp = (C10_WARP_SIZE * Vec) / rot_dim;  
-    constexpr int num_head_per_block = num_head_per_warp * num_warp_per_block;  
+    const int num_head_per_warp = (warp_size * Vec) / rot_dim;
+    const int num_head_per_block = num_head_per_warp * num_warp_per_block;
     const int block_per_token = (num_head + num_head_per_block - 1) / num_head_per_block; 
     const int q_grid_x = block_per_token * bs;  
-    const int block_x = num_warp_per_block * C10_WARP_SIZE;  
+    const int block_x = num_warp_per_block * warp_size;
     
     // 计算ROPE(K)
     constexpr int kv_c_dim = 512;
@@ -505,16 +506,16 @@ __global__ void rms_rope_int8quant_kernel(
     TORCH_CHECK(kv_c_normed_int8.size(1) == kv_c_dim, "kv_c_normed_int8.size(1) must be kv_c_dim");
     TORCH_CHECK(kv_c_normed_scale.dim() == 1 || kv_c_normed_scale.dim() == 2, "kv_c_normed_scale must be [bs] or [bs, 1]");
     
-    constexpr int element_per_warp = C10_WARP_SIZE * Vec;
-    constexpr int k_token_per_warp = element_per_warp / (rot_dim);  
-    constexpr int k_token_per_block = k_token_per_warp * num_warp_per_block; 
+    const int element_per_warp = warp_size * Vec;
+    const int k_token_per_warp = element_per_warp / rot_dim;
+    const int k_token_per_block = k_token_per_warp * num_warp_per_block;
     const int k_grid_x = (bs + k_token_per_block - 1) / k_token_per_block; 
     
     // 计算RMS(K)
     TORCH_CHECK(kv_c.dim() == 2, "kv_c must be 2D tensor [bs, kv_c_dim + rot_dim]");
     TORCH_CHECK(kv_c.size(1) == kv_c_dim, "kv_c.size(1) must be kv_c_dim");
-    constexpr int k_rms_token_per_warp = element_per_warp / (kv_c_dim);
-    constexpr int k_rms_token_per_block = k_rms_token_per_warp * num_warp_per_block; 
+    const int k_rms_token_per_warp = element_per_warp / kv_c_dim;
+    const int k_rms_token_per_block = k_rms_token_per_warp * num_warp_per_block;
     const int k_rms_grid_x = (bs + k_rms_token_per_block - 1) / k_rms_token_per_block; 
     
     TORCH_CHECK(slot_mapping.dim() == 1, "slot_mapping must be 1D tensor [bs]");

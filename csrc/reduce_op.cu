@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce.h"
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 namespace at {
 namespace native {
@@ -97,8 +99,9 @@ __global__ void ReduceSum(scalar_t* input, scalar_t* ret,int cols){
   int blockidx=blockIdx.x;
   int threadidx=threadIdx.x;
   int block_cols=blockidx*cols;
-  constexpr int share_size=blocksize/C10_WARP_SIZE;
-  __shared__ float val_shared[share_size];
+  constexpr int share_size=blocksize / C10_WARP_SIZE;
+  constexpr int share_size_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float val_shared[share_size_alloc];
   using VecTpye=memory::aligned_vector<scalar_t, VEC>;
   using new_type = __change_type<scalar_t>;
   VecTpye *X=(VecTpye*)(input+block_cols);
@@ -126,8 +129,9 @@ __global__ void ReduceSumFast(scalar_t* input, scalar_t* ret){
   int blockidx=blockIdx.x;
   int threadidx=threadIdx.x;
   int block_cols=blockidx*cols;
-  constexpr int share_size=blocksize/C10_WARP_SIZE;
-  __shared__ float val_shared[share_size];
+  constexpr int share_size=blocksize / C10_WARP_SIZE;
+  constexpr int share_size_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float val_shared[share_size_alloc];
   using VecTpye=memory::aligned_vector<scalar_t, VEC>;
   using new_type = __change_type<scalar_t>;
   VecTpye *X=(VecTpye*)(input+block_cols);
@@ -155,8 +159,9 @@ __global__ void ReduceSumFast(scalar_t* input, float* ret,int lines_per_block){
   int blockidx=blockIdx.x;
   int threadidx=threadIdx.x;
   int block_cols=blockidx*cols;
-  constexpr int share_size=blocksize/C10_WARP_SIZE;
-  __shared__ float val_shared[share_size];
+  constexpr int share_size=blocksize / C10_WARP_SIZE;
+  constexpr int share_size_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float val_shared[share_size_alloc];
   using VecTpye=memory::aligned_vector<scalar_t, VEC>;
   using new_type = __change_type<scalar_t>;
   VecTpye *X=(VecTpye*)(input+block_cols);

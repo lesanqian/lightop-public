@@ -21,6 +21,7 @@
 
 #include <torch/extension.h>
 #include <ATen/dtk_macros.h>
+#include <c10/macros/Macros.h>
 #include <c10/util/BFloat16.h>
 #include "hip/hip_bf16.h"
 #include "hip/hip_fp16.h"

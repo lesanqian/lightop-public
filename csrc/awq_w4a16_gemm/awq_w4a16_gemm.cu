@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "awq_w4a16_common.h"
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 namespace at {
 namespace native {
@@ -10,7 +12,7 @@ namespace native {
 
 
   template <typename scalar_t, int NUM_K_WARPS,int NPerWarp,int KPerWarp, int NUM_N_WARPS, bool UseMarlin>
-  __global__ void __launch_bounds__(NUM_K_WARPS*NUM_N_WARPS*C10_WARP_SIZE, 2)  gemm_awq_w4a16_kernel(scalar_t* d, scalar_t* a, int32_t* b, int32_t* scale_zeros, int M, int N, int K, int GroupSize)
+  __global__ void __launch_bounds__(NUM_K_WARPS*NUM_N_WARPS*C10_WARP_SIZE_UPPER_BOUND, 2)  gemm_awq_w4a16_kernel(scalar_t* d, scalar_t* a, int32_t* b, int32_t* scale_zeros, int M, int N, int K, int GroupSize)
   {
   
     auto scale_n = reinterpret_cast<const half2_t*>(scale_zeros);
@@ -381,6 +383,7 @@ void gemm_awq_w4a16(Tensor& ret,const Tensor& x,const Tensor& weight,const Tenso
   const int K = x.sizes()[1];
   const int GroupSize = K / scales_zeros.sizes()[1];
   auto stream = at::cuda::getCurrentCUDAStream();
+  const int warp_size = lightop::compat::warp_size();
   auto out_dtype = x.scalar_type();
 
   // printf("M=%d, N=%d, K=%d, G=%d, use_marlin=%d\n", M, N, K, G, use_marlin);
@@ -411,7 +414,7 @@ void gemm_awq_w4a16(Tensor& ret,const Tensor& x,const Tensor& weight,const Tenso
                 const int blocks = (N-1)/(NPerWarp*NUM_N_WARPS)+1;
                 const int m_blocks = (M-1)/(BlockM)+1;
 
-                gemm_awq_w4a16_kernel_with_splitk<scalar_t,NUM_K_WARPS,NPerWarp,KPerWarp,NUM_N_WARPS,UseMarlin><<<dim3(m_blocks,blocks,splitk),dim3(NUM_K_WARPS*C10_WARP_SIZE, NUM_N_WARPS),all_lds_size,stream>>>
+                gemm_awq_w4a16_kernel_with_splitk<scalar_t,NUM_K_WARPS,NPerWarp,KPerWarp,NUM_N_WARPS,UseMarlin><<<dim3(m_blocks,blocks,splitk),dim3(NUM_K_WARPS*warp_size, NUM_N_WARPS),all_lds_size,stream>>>
                 ((scalar_t*)ret.data_ptr(),(scalar_t*)x.data_ptr(),(int32_t*)weight.data_ptr(),(int32_t*)scales_zeros.data_ptr(),splitk_work_space,semaphores,M,N,K, GroupSize);
               }
               else{
@@ -419,7 +422,7 @@ void gemm_awq_w4a16(Tensor& ret,const Tensor& x,const Tensor& weight,const Tenso
                 const int m_blocks = (M-1)/(BlockM)+1;
                 const int  lds_size= NUM_K_WARPS > 1 ? NUM_K_WARPS/2*NPerWarp*MIN(BlockM,M)*sizeof(float) : NPerWarp*(MIN(BlockM,M))*sizeof(half_t);
                 const int all_lds_size = lds_size*NUM_N_WARPS;
-                gemm_awq_w4a16_kernel<scalar_t,NUM_K_WARPS,NPerWarp,KPerWarp,NUM_N_WARPS,UseMarlin><<<dim3(m_blocks,blocks),dim3(NUM_K_WARPS*C10_WARP_SIZE, NUM_N_WARPS),all_lds_size,stream>>>
+                gemm_awq_w4a16_kernel<scalar_t,NUM_K_WARPS,NPerWarp,KPerWarp,NUM_N_WARPS,UseMarlin><<<dim3(m_blocks,blocks),dim3(NUM_K_WARPS*warp_size, NUM_N_WARPS),all_lds_size,stream>>>
                 ((scalar_t*)ret.data_ptr(),(scalar_t*)x.data_ptr(),(int32_t*)weight.data_ptr(),(int32_t*)scales_zeros.data_ptr(),M,N,K, GroupSize); 
               }
 

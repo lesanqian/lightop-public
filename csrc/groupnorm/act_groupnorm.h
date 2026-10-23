@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce.h"
+#include <c10/macros/Macros.h>
 #include "elementwise_op.h"
 using namespace std;
 

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rmsnorm.h"
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 namespace at{
 namespace native{
@@ -10,7 +12,7 @@ namespace {
   constexpr int VEC = 4;
 }
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceSum_NEW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -21,7 +23,8 @@ __inline__ __device__ T WarpReduceSum_NEW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceSum_NEW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -45,8 +48,9 @@ __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
 template <typename scalar_t,typename T_ACC,int Vec=4,int block_size=512>
 __global__ void fused_rn_add_dropout_kernel_val_fast(scalar_t* input,scalar_t* residual,scalar_t* ret,scalar_t* gamma,int cols,scalar_t eps)
 {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
   T_ACC val=0;
   int i=blockIdx.x;

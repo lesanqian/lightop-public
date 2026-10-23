@@ -19,12 +19,10 @@
 #include <torch/extension.h>
 
 #include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <c10/cuda/CUDAMathCompat.h>
 
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 
 namespace at {  
 namespace native {
@@ -127,7 +125,7 @@ inline __device__ uint32_t float_to_fp8e5m2_x4(float a, float b, float c, float 
   #endif
 }
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceMax_ROW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -138,7 +136,8 @@ __inline__ __device__ T WarpReduceMax_ROW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceMax_ROW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceMax_ROW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -178,10 +177,10 @@ __global__ void per_token_group_quant_fp8_small_kernel(
     const int64_t total_groups) {
 
     constexpr int VEC = 16;
-    
+
   
     int global_tid = blockIdx.x * blockDim.x + threadIdx.x;
-    
+
    
     int global_group_id = global_tid / THREADS_PER_GROUP;
     int lane_in_group = global_tid % THREADS_PER_GROUP;
@@ -262,7 +261,8 @@ __global__ void per_token_group_quant_fp8_kernel(
     int bid = blockIdx.x;  
     
     constexpr int share_size = block_size / C10_WARP_SIZE;
-    __shared__ float val_shared[share_size];
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float val_shared[share_size_alloc];
     __shared__ float s_group_scale;
 
     using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce.h"
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include "hip/hip_bf16.h"
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -658,6 +660,7 @@ Tensor gemm_w8_a8_smooth_colmajor(const Tensor& x,const Tensor& weight,const Ten
     int temp;
     Tensor ret=at::empty(size,x.options().dtype(out_dtype));
     auto stream = at::cuda::getCurrentCUDAStream();
+    const int warp_size = lightop::compat::warp_size();
 // GPU 内存管理结构体
 struct GPUWorkSpace {
     int* splitk_work_space;
@@ -714,18 +717,18 @@ struct GPUWorkSpace {
                     if (use_n_warps){
                           int lds_size= NumWarps*NPerBlock*m*sizeof(float);
                           int blocks=(n-1)/(NPerBlock*NumWarps)+1;
-                          gemm_w8_a8_smooth_kernel_colmajor_NWarps<scalar_t,NumWarps,NPerBlock,KPerWarp,UseBias><<<dim3(blocks),NumWarps*C10_WARP_SIZE,lds_size,stream>>>
+                          gemm_w8_a8_smooth_kernel_colmajor_NWarps<scalar_t,NumWarps,NPerBlock,KPerWarp,UseBias><<<dim3(blocks),NumWarps*warp_size,lds_size,stream>>>
                               ((int8_t*)x.data_ptr(),(int8_t*)weight.data_ptr(),(scalar_t*)ret.data_ptr(),(float*)scale_a.data_ptr(),(float*)scale_b.data_ptr(),bias_ptr,m,n,k);   
                     }
                     else{
                           int blocks=(n-1)/NPerBlock+1;
                           int lds_size= NumWarps > 1 ? NumWarps/2*NPerBlock*m*sizeof(float) : NPerBlock*m*sizeof(float); // 折半归约
                           if(splitk>1){
-                              gemm_w8_a8_smooth_kernel_with_splitk_colmajor<scalar_t,NumWarps,NPerBlock,KPerWarp,UseBias><<<dim3(splitk,blocks),NumWarps*C10_WARP_SIZE,lds_size,stream>>>
+                              gemm_w8_a8_smooth_kernel_with_splitk_colmajor<scalar_t,NumWarps,NPerBlock,KPerWarp,UseBias><<<dim3(splitk,blocks),NumWarps*warp_size,lds_size,stream>>>
                                   ((int8_t*)x.data_ptr(),(int8_t*)weight.data_ptr(),(scalar_t*)ret.data_ptr(),(float*)scale_a.data_ptr(),(float*)scale_b.data_ptr(),bias_ptr,splitk_work_space,semaphores,m,n,k,splitk); 
                           }
                           else{ 
-                              gemm_w8_a8_smooth_kernel_colmajor<scalar_t,NumWarps,NPerBlock,KPerWarp,UseBias><<<dim3(blocks),NumWarps*C10_WARP_SIZE,lds_size,stream>>>
+                              gemm_w8_a8_smooth_kernel_colmajor<scalar_t,NumWarps,NPerBlock,KPerWarp,UseBias><<<dim3(blocks),NumWarps*warp_size,lds_size,stream>>>
                                   ((int8_t*)x.data_ptr(),(int8_t*)weight.data_ptr(),(scalar_t*)ret.data_ptr(),(float*)scale_a.data_ptr(),(float*)scale_b.data_ptr(),bias_ptr,m,n,k); 
                           }
                     }

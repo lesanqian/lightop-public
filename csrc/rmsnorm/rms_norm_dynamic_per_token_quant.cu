@@ -19,6 +19,7 @@
 #include <torch/extension.h>
 
 #include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <c10/cuda/CUDAMathCompat.h>
 
 #include "reduce.h"
@@ -70,8 +71,9 @@ static __device__ inline float clamp_rms_quant_value(float value, float limit) {
 template <typename scalar_t,typename scalar_out_t,typename T_ACC,int Vec=4,int block_size=512, bool inpit_update=false, bool APPLY_CLAMP=false>
 __global__ void rms_norm_dynamic_per_token_quant_(scalar_t* input,scalar_t* residual,scalar_t* gamma,int32_t const cols,float const eps,scalar_out_t* out,float* scales, int stride, float limit)
 {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
   T_ACC val = 0;
   int bid = blockIdx.x;
@@ -143,7 +145,8 @@ template <typename scalar_t,typename scalar_out_t,typename T_ACC,int Vec,int blo
 __global__ void rms_norm_dynamic_per_token_quant_loop(scalar_t* input,scalar_t* residual,scalar_t* gamma,int32_t const cols,float const eps, scalar_out_t* out,float* scales, int stride, float limit)
 {
   constexpr int share_size=block_size / C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
   T_ACC val = 0.0f;
   int bid = blockIdx.x;
@@ -201,8 +204,9 @@ __global__ void rms_norm_dynamic_per_token_quant_loop(scalar_t* input,scalar_t* 
 template <typename scalar_t,typename scalar_out_t,typename T_ACC,int Vec=4,int block_size=512,bool inpit_update=false, bool APPLY_CLAMP=false>
 __global__ void rms_norm_dynamic_per_token_quant_residual(scalar_t* input,scalar_t* residual,scalar_t* gamma,int cols,float const eps, scalar_out_t* out,float* scales, int stride, float limit)
 {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
   T_ACC val = 0;
   int bid = blockIdx.x;
@@ -281,7 +285,8 @@ template <typename scalar_t,typename scalar_out_t,typename T_ACC,int Vec=1,int b
 __global__ void rms_norm_dynamic_per_token_quant_residual_loop(scalar_t* input,scalar_t* residual,scalar_t* gamma,int cols,float const eps, scalar_out_t* out,float* scales, int stride, float limit)
 {
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
   T_ACC val = 0.0f;
   int bid = blockIdx.x;
@@ -701,10 +706,11 @@ void rms_norm_dynamic_per_token_quant_sglang_kernel(
   using LoadT = at::native::memory::aligned_vector<scalar_t, Vec>;
   using StoreT = at::native::memory::aligned_vector<int8_t, Vec>;
   constexpr int share_size = block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   constexpr float qmax = 127.0f;
   constexpr float min_absmax = 1.0e-10f;
 
-  __shared__ T_ACC reduce_shared[share_size];
+  __shared__ T_ACC reduce_shared[share_size_alloc];
   __shared__ T_ACC row_rstd;
   __shared__ float row_absmax;
 
@@ -1146,10 +1152,11 @@ __global__ void mla_qkv_a_rms_norm_dynamic_per_token_quant_sglang_kernel(
   using LoadT = at::native::memory::aligned_vector<scalar_t, Vec>;
   using StoreT = at::native::memory::aligned_vector<int8_t, Vec>;
   constexpr int share_size = block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   constexpr float qmax = 127.0f;
   constexpr float min_absmax = 1.0e-10f;
 
-  __shared__ T_ACC reduce_shared[share_size];
+  __shared__ T_ACC reduce_shared[share_size_alloc];
   __shared__ T_ACC row_rstd;
   __shared__ float row_absmax;
 

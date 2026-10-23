@@ -8,6 +8,7 @@
 #include <ATen/cuda/detail/TensorInfo.cuh>
 #include <ATen/cuda/CUDAGraphsUtils.cuh>
 #include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <hiprand_kernel.h>
 #include <ATen/native/TensorIterator.h>
 #include <ATen/native/cuda/Loops.cuh>
@@ -18,9 +19,6 @@
 #include <torch/autograd.h>
 #include <THC/THCDeviceUtils.cuh>
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 namespace at{
 namespace native{
 
@@ -41,7 +39,7 @@ BlockReduce(T val, const ReduceOp& op, T* shared) {
   const int lid = threadIdx.x % C10_WARP_SIZE;
   const int wid = threadIdx.x / C10_WARP_SIZE;
   const int block_size=blockDim.x;
-  const int share_size=block_size/C10_WARP_SIZE;
+  const int share_size=block_size / C10_WARP_SIZE;
   val = WarpReduce(val, op);
   if(block_size==64)return val;
   if (lid == 0&&wid<share_size) {
@@ -68,7 +66,7 @@ __inline__ __device__ T BlockReduceSum(T val, T* shared) {
   const int lid = threadIdx.x % C10_WARP_SIZE;
   const int wid = threadIdx.x / C10_WARP_SIZE;
   const int block_size=blockDim.x;
-  const int share_size=block_size/C10_WARP_SIZE;
+  const int share_size=block_size / C10_WARP_SIZE;
   val = WarpReduceSum(val);
   if(block_size==C10_WARP_SIZE)return val;
   if (lid == 0&&wid<share_size) {
@@ -128,7 +126,8 @@ __inline__ __device__ void BlockReduceSum2(T& val1,T& val2, T* shared) {
   const int wid = threadIdx.x / C10_WARP_SIZE;
   WarpReduceSum2<T,32>(val1,val2);
   if constexpr (blocksize==64) return;
-  constexpr int share_size=blocksize/C10_WARP_SIZE;
+  constexpr int share_size=blocksize / C10_WARP_SIZE;
+  constexpr int share_size_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND;
   if (lid == 0&&wid<share_size) {
       shared[wid] = val1;
       shared[wid+share_size] = val2;
@@ -170,7 +169,7 @@ template <typename scalar_t,typename T_ACC,int VEC>
 __global__ void ReduceVEC(scalar_t* data_gpu,T_ACC* block_gpu,int *semaphores,scalar_t *sum_gpu,int length,int stride)
 {
     __shared__ int islast;
-    __shared__ T_ACC smem[REDUCE_BLOCK_SIZE/C10_WARP_SIZE];
+    __shared__ T_ACC smem[REDUCE_BLOCK_SIZE / C10_WARP_SIZE_UPPER_BOUND];
     using VecTpyeS=memory::aligned_vector<scalar_t, VEC>;
     using VecTpyeT=memory::aligned_vector<T_ACC, VEC>;
     const int tid=threadIdx.x;
@@ -281,7 +280,7 @@ void bias_reduce_sum(scalar_t* output_gpu, scalar_t* data_gpu,int length,int str
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceSum_ROW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -292,7 +291,8 @@ __inline__ __device__ T WarpReduceSum_ROW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceSum_ROW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceSum_ROW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -312,7 +312,7 @@ __inline__ __device__ T BlockReduceSum_ROW(T val, T* shared) {
   }
 }
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceMax_ROW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -323,7 +323,8 @@ __inline__ __device__ T WarpReduceMax_ROW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceMax_ROW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceMax_ROW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {

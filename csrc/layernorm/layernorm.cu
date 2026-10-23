@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm.h"
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <c10/util/MaybeOwned.h>
 #include <iostream> //lj
 int get_layernorm_blocksize(int cols)
@@ -137,8 +139,9 @@ __global__ void layernorm_forward_kernel_fast_welford(scalar_t* input,scalar_t* 
   using T_ACC = acc_type<scalar_t, true>;
   using WelfordType = WelfordData<T_ACC, int, T_ACC>;
   using WelfordOp = WelfordOps<T_ACC, T_ACC, int, T_ACC, thrust::pair<T_ACC, T_ACC>>;
-  constexpr int share_size=blocksize/C10_WARP_SIZE;
-  __shared__ typename std::aligned_storage<sizeof(WelfordType), alignof(WelfordType)>::type val_shared[share_size];
+  constexpr int share_size=blocksize / C10_WARP_SIZE;
+  constexpr int share_size_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ typename std::aligned_storage<sizeof(WelfordType), alignof(WelfordType)>::type val_shared[share_size_alloc];
   __shared__ T_ACC s_mean;
   __shared__ T_ACC s_rstd;
   WelfordType* val_shared_ptr = reinterpret_cast<WelfordType*>(val_shared);
@@ -201,8 +204,9 @@ __global__ void layernorm_forward_kernel_stage1(scalar_t* input,float *sums,int 
   int threadidx=threadIdx.x;
   int block_cols=blockidx*cols;
   using T_ACC = acc_type<scalar_t, true>;
-  constexpr int share_size=blocksize/C10_WARP_SIZE*2;
-  __shared__ float val_shared[share_size];
+  constexpr int share_size=blocksize / C10_WARP_SIZE*2;
+  constexpr int share_size_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND*2;
+  __shared__ float val_shared[share_size_alloc];
   using VecTpye=memory::aligned_vector<scalar_t, VEC>;
   using new_type = __change_type<scalar_t>;
   VecTpye *X=(VecTpye*)(input+block_cols);
@@ -284,9 +288,10 @@ __global__ void layernorm_forward_kernel_stage_fused(scalar_t* input,scalar_t* r
   int block_cols=blockidx*cols;
   using VecTpye=memory::aligned_vector<scalar_t, VEC>;
   using new_type = __change_type<scalar_t>;
-  constexpr int share_size=blocksize/C10_WARP_SIZE*2;
+  constexpr int share_size=blocksize / C10_WARP_SIZE*2;
+  constexpr int share_size_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND*2;
   constexpr int vecs_per_thread=cols/(VEC*blocksize);
-  __shared__ float val_shared[share_size];
+  __shared__ float val_shared[share_size_alloc];
   VecTpye *X=(VecTpye*)(input+block_cols);
   VecTpye *Y=(VecTpye*)(ret+block_cols);
   VecTpye x_cache[vecs_per_thread];
@@ -361,8 +366,9 @@ __global__ void layernorm_forward_kernel_fast(scalar_t* input,scalar_t* ret,floa
   int threadidx=threadIdx.x;
   int block_cols=blockidx*cols;
   using T_ACC = acc_type<scalar_t, true>;
-  constexpr int share_size=blocksize/C10_WARP_SIZE*2;
-  __shared__ float val_shared[share_size];
+  constexpr int share_size=blocksize / C10_WARP_SIZE*2;
+  constexpr int share_size_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND*2;
+  __shared__ float val_shared[share_size_alloc];
   __shared__ T_ACC s_mean;
   __shared__ T_ACC s_rstd;
   using VecTpye=memory::aligned_vector<scalar_t, VEC>;

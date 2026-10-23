@@ -20,6 +20,7 @@
 #include <torch/extension.h>
 
 #include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <c10/cuda/CUDAMathCompat.h>
 
 #include "reduce.h"
@@ -68,8 +69,9 @@ static inline __device__ int8_t float_to_int8_rn(float x) {
 template <typename scalar_t, typename scalar_weight_t, typename scalar_out_t, typename T_ACC, bool has_weight, int Vec=4, int block_size=512, bool write_norm=false>
 __global__ void rms_norm_smooth_per_token_dynamic_quant_(scalar_t* input, scalar_t* residual, scalar_weight_t* gamma, float* smooth_scale, int32_t const cols, float const eps, scalar_out_t* out, float* scales, scalar_t* after_norm, int stride, int num_tokens)
 {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
   __shared__ float s_token_scale;
   
@@ -145,7 +147,8 @@ template <typename scalar_t, typename scalar_weight_t, typename scalar_out_t, ty
 __global__ void rms_norm_smooth_per_token_dynamic_quant_loop(scalar_t* input, scalar_t* residual, scalar_weight_t* gamma, float* smooth_scale, int32_t const cols, float const eps, scalar_out_t* out, float* scales, scalar_t* after_norm, int stride, int num_tokens)
 {
   constexpr int share_size=block_size / C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
   __shared__ float s_token_scale; 
 
@@ -199,8 +202,9 @@ __global__ void rms_norm_smooth_per_token_dynamic_quant_loop(scalar_t* input, sc
 template <typename scalar_t, typename scalar_weight_t, typename scalar_out_t, typename T_ACC, bool has_weight, int Vec=4, int block_size=512, bool write_norm=false, bool write_res=true>
 __global__ void rms_norm_smooth_per_token_dynamic_quant_residual(scalar_t* input, scalar_t* residual, scalar_weight_t* gamma, float* smooth_scale, int cols, float const eps, scalar_out_t* out, float* scales, scalar_t* after_norm, int stride, scalar_t* residual_out, int num_tokens)
 {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
   __shared__ float s_token_scale; 
 
@@ -280,7 +284,8 @@ template <typename scalar_t, typename scalar_weight_t, typename scalar_out_t, ty
 __global__ void rms_norm_smooth_per_token_dynamic_quant_residual_loop(scalar_t* input, scalar_t* residual, scalar_weight_t* gamma, float* smooth_scale, int cols, float const eps, scalar_out_t* out, float* scales, scalar_t* after_norm, int stride, scalar_t* residual_out, int num_tokens)
 {
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ T_ACC val_shared[share_size];
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC val_shared[share_size_alloc];
   __shared__ T_ACC s_rstd;
   __shared__ float s_token_scale; 
 

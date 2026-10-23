@@ -16,10 +16,9 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 
 namespace at {
 namespace native {
@@ -72,7 +71,7 @@ static __device__ __forceinline__ float ln1p_gate(const float z) {
   }
 }
 
-template <typename T, int reducesize = C10_WARP_SIZE>
+template <typename T, int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T ln1p_warp_reduce_sum(T val) {
 #pragma unroll
   for (int offset = reducesize / 2; offset > 0; offset >>= 1) {
@@ -84,6 +83,7 @@ __inline__ __device__ T ln1p_warp_reduce_sum(T val) {
 template <typename T, int block_size = 512>
 __inline__ __device__ T ln1p_block_reduce_sum(T val, T* shared) {
   constexpr int share_size = block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = ln1p_warp_reduce_sum<T>(val);
 
   if constexpr (block_size > C10_WARP_SIZE) {
@@ -372,7 +372,8 @@ __global__ void layer_norm_fwd_1pass_vec_kernel(
     const int64_t N,
     const T_ACC eps) {
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ T_ACC shared[share_size];
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC shared[share_size_alloc];
   __shared__ T_ACC s_mean;
   __shared__ T_ACC s_rstd;
 
@@ -510,7 +511,8 @@ __global__ void layer_norm_fwd_1pass_vec_multi_kernel(
     const int64_t N,
     const T_ACC eps) {
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ T_ACC shared[share_size];
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC shared[share_size_alloc];
   __shared__ T_ACC s_mean;
   __shared__ T_ACC s_rstd;
 
@@ -661,7 +663,8 @@ __global__ void layer_norm_fwd_1pass_scalar_kernel(
     const int64_t N,
     const T_ACC eps) {
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ T_ACC shared[share_size];
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ T_ACC shared[share_size_alloc];
   __shared__ T_ACC s_mean;
   __shared__ T_ACC s_rstd;
 

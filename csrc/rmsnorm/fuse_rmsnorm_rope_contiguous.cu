@@ -14,6 +14,8 @@
 #include <ATen/AccumulateType.h>
 #include <THC/THCDeviceUtils.cuh>
 #include <ATen/Dispatch.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include "hip/hip_fp16.h"
 #include "hip/hip_bf16.h"
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
@@ -32,9 +34,6 @@ template <typename T, int N> struct alignas(sizeof(T) * N) Vector {
   #include <hipcub/hipcub.hpp>
 #endif
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 namespace at{
 namespace native{
 
@@ -244,7 +243,7 @@ inline __device__ uint32_t float_to_bhalf_to_fp8e5m2_x4(float a, float b, float 
 
 
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceSum_NEW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -255,7 +254,8 @@ __inline__ __device__ T WarpReduceSum_NEW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceSum_NEW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -577,7 +577,7 @@ __global__ void rms_rope_kernel(
       for (int ii = 0; ii < Vec; ii++) {
         val += static_cast<T_ACC>(input_vec[ii]) * static_cast<T_ACC>(input_vec[ii]);
       }
-      val = BlockReduceSum_NEW<T_ACC,C10_WARP_SIZE>(val,nullptr);
+      val = BlockReduceSum_NEW<T_ACC,C10_WARP_SIZE_UPPER_BOUND>(val,nullptr);
       if(laneid == 0) {
         s_rstd = c10::cuda::compat::rsqrt(val / kv_c_dim + epsilon);
       }
@@ -725,8 +725,9 @@ __global__ void rms_rope_kernel(
         std::isfinite(kv_quant_epsilon) && kv_quant_epsilon > 0.0f,
         "kv_quant_epsilon must be finite and positive");
     TORCH_CHECK(
-        C10_WARP_SIZE == 64,
+        lightop::compat::warp_size() == 64,
         "fused_rms_norm_rope_contiguous currently requires a 64-thread wavefront");
+    const int warp_size = lightop::compat::warp_size();
 
     // printf("hello fused_rms_norm_rope_contiguous\n");
     // 暂时只实现rope逻辑，rms norm逻辑后续添加
@@ -806,11 +807,11 @@ __global__ void rms_rope_kernel(
     // 计算ROPE(Q)grid和block尺寸
     constexpr int num_warp_per_block = 4;
     constexpr int Vec = 8;
-    constexpr int num_head_per_warp = (C10_WARP_SIZE * Vec) / rot_dim;  // 512 / 64 = 8
-    constexpr int num_head_per_block = num_head_per_warp * num_warp_per_block;  // 8 * 4 = 32
+    const int num_head_per_warp = (warp_size * Vec) / rot_dim;  // 512 / 64 = 8
+    const int num_head_per_block = num_head_per_warp * num_warp_per_block;  // 8 * 4 = 32
     const int block_per_token = (num_head + num_head_per_block - 1) / num_head_per_block;  // 向上取整
     const int q_grid_x = block_per_token * bs;  // 4 * bs
-    const int block_x = num_warp_per_block * C10_WARP_SIZE;  // 128
+    const int block_x = num_warp_per_block * warp_size;  // 128
     // 计算ROPE(K)grid和block尺寸
     constexpr int kv_c_dim = 512;
     constexpr int k_stride_head = kv_c_dim + rot_dim;
@@ -827,9 +828,9 @@ __global__ void rms_rope_kernel(
     TORCH_CHECK(kv_c_normed.size(0) == bs, "kv_c_normed.size(0) must be bs");
     TORCH_CHECK(kv_c_normed.stride(0) == kv_c_dim, "kv_c_normed.stride(0) must be kv_c_dim");
     TORCH_CHECK(kv_c_normed.stride(1) == 1, "kv_c_normed must be contiguous");
-    constexpr int element_per_warp = C10_WARP_SIZE * Vec;
-    constexpr int k_token_per_warp = element_per_warp / (rot_dim);  // 8
-    constexpr int k_token_per_block = k_token_per_warp * num_warp_per_block; // 32
+    const int element_per_warp = warp_size * Vec;
+    const int k_token_per_warp = element_per_warp / rot_dim;  // 8
+    const int k_token_per_block = k_token_per_warp * num_warp_per_block; // 32
     const int k_grid_x = (bs + k_token_per_block - 1) / k_token_per_block; // (32 + 32 - 1) / 32 = 1
     
     // 计算RMS(K)grid和block尺寸
@@ -839,10 +840,10 @@ __global__ void rms_rope_kernel(
     TORCH_CHECK(kv_c.stride(0) == k_bs_stride, "kv_c.stride(0) must equal k_pe.stride(0)");
     TORCH_CHECK(kv_c.stride(1) == 1, "kv_c last dimension must be contiguous");
     // const int k_bs_stride = kv_c.stride(0);
-    constexpr int k_rms_token_per_warp_unchecked = element_per_warp / (kv_c_dim);
-    constexpr int k_rms_token_per_warp =
+    const int k_rms_token_per_warp_unchecked = element_per_warp / kv_c_dim;
+    const int k_rms_token_per_warp =
         k_rms_token_per_warp_unchecked > 0 ? k_rms_token_per_warp_unchecked : 1;
-    constexpr int k_rms_token_per_block = k_rms_token_per_warp * num_warp_per_block; // 4
+    const int k_rms_token_per_block = k_rms_token_per_warp * num_warp_per_block; // 4
     const int k_rms_grid_x = (bs + k_rms_token_per_block - 1) / k_rms_token_per_block; // (32 + 32 - 1) / 32 = 1
     // 检查KV_CACHE相关参数
     TORCH_CHECK(slot_mapping.dim() == 1, "slot_mapping must be 1D tensor [bs]");

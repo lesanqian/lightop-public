@@ -3,6 +3,8 @@
 
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAException.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include "reduce.h"
 namespace at {
 namespace native {
@@ -104,13 +106,14 @@ Tensor gemm_opt(const Tensor& x, const Tensor& weight,
     Tensor ret=at::empty({m,n},x.options().dtype(dtype));
     if (m==0 || n==0) return ret;
     auto stream=at::cuda::getCurrentCUDAStream();
+    const int warp_size = lightop::compat::warp_size();
     dim3 grid((n+15)/16, (m+15)/16);
     AT_DISPATCH_REDUCED_FLOATING_TYPES(x.scalar_type(), "gemm_opt", [&] {
         if (dtype==at::kFloat)
-            gemm_nt_fp16<scalar_t,float><<<grid,4*C10_WARP_SIZE,0,stream>>>(
+            gemm_nt_fp16<scalar_t,float><<<grid,4*warp_size,0,stream>>>(
                 x.data_ptr<scalar_t>(),weight.data_ptr<scalar_t>(),ret.data_ptr<float>(),m,n,k);
         else
-            gemm_nt_fp16<scalar_t,scalar_t><<<grid,4*C10_WARP_SIZE,0,stream>>>(
+            gemm_nt_fp16<scalar_t,scalar_t><<<grid,4*warp_size,0,stream>>>(
                 x.data_ptr<scalar_t>(),weight.data_ptr<scalar_t>(),ret.data_ptr<scalar_t>(),m,n,k);
     });
     C10_CUDA_KERNEL_LAUNCH_CHECK();
@@ -296,11 +299,12 @@ Tensor gemm_w4_a16(const Tensor& x,const Tensor& weight,const Tensor& scale_n,co
     // std::cout<<"weight.strides()="<<weight.strides()[0]<<","<<weight.strides()[1]<<std::endl;
     Tensor ret=at::empty(size,x.options());
     auto stream = at::cuda::getCurrentCUDAStream();
+    const int warp_size = lightop::compat::warp_size();
     if(select_gemv(m,n,k)){
         constexpr int NumWarps=2;
         int blocks=n;
         M_SWITCH(m,[&] {
-            gemv_w4_a16_kernel<NumWarps,M><<<blocks,NumWarps*C10_WARP_SIZE,0,stream>>>
+            gemv_w4_a16_kernel<NumWarps,M><<<blocks,NumWarps*warp_size,0,stream>>>
                     ((_Float16*)x.data_ptr(),(uint32_t*)weight.data_ptr(),(_Float16*)ret.data_ptr(),(_Float16*)scale_n.data_ptr(),(_Float16*)zero_n.data_ptr(),n,k);
         });
     }
@@ -310,7 +314,7 @@ Tensor gemm_w4_a16(const Tensor& x,const Tensor& weight,const Tensor& scale_n,co
         int blocks=(n-1)/NPerBlock+1;
         NUM_WARPS_SWITCH(warps,[&] {
             int lds_size=NumWarps/2*NPerBlock*m*sizeof(float);
-            gemm_w4_a16_kernel<NumWarps,NPerBlock><<<blocks,NumWarps*C10_WARP_SIZE,lds_size,stream>>>
+            gemm_w4_a16_kernel<NumWarps,NPerBlock><<<blocks,NumWarps*warp_size,lds_size,stream>>>
                     ((_Float16*)x.data_ptr(),(uint32_t*)weight.data_ptr(),(_Float16*)ret.data_ptr(),(_Float16*)scale_n.data_ptr(),(_Float16*)zero_n.data_ptr(),m,n,k);
         });
     }

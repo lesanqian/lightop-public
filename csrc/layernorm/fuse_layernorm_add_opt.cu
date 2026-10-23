@@ -9,13 +9,12 @@
 #include <c10/cuda/CUDAMathCompat.h>
 #include <THC/THCDeviceUtils.cuh>
 #include <torch/cuda.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 #include <cmath>
 #include <cstdint>
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 
 namespace at {
 namespace native {
@@ -33,6 +32,7 @@ __device__ __forceinline__ T warp_sum(T x) {
 template <typename T, int BLOCK>
 __device__ __forceinline__ void block_sum2(T& sum, T& sum_sq, T* shared) {
   constexpr int WARPS = BLOCK / C10_WARP_SIZE;
+  constexpr int WARPS_ALLOC = BLOCK / C10_WARP_SIZE_UPPER_BOUND;
   const int lane = threadIdx.x % C10_WARP_SIZE;
   const int warp = threadIdx.x / C10_WARP_SIZE;
   sum = warp_sum(sum);
@@ -61,7 +61,8 @@ __global__ void layer_norm_target_kernel(
     int hidden_size, acc_t eps, int num_tokens,
     acc_t limit) {
   constexpr int WARPS = BLOCK / C10_WARP_SIZE;
-  __shared__ acc_t reduce_shared[WARPS * 2];
+  constexpr int WARPS_ALLOC = BLOCK / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ acc_t reduce_shared[WARPS_ALLOC * 2];
   __shared__ acc_t s_mean;
   __shared__ acc_t s_rstd;
   using VecT = memory::aligned_vector<scalar_t, VEC>;
@@ -148,7 +149,8 @@ __global__ void layer_norm_generic_kernel(
     int hidden_size, acc_t eps, int num_tokens,
     acc_t limit) {
   constexpr int WARPS = BLOCK / C10_WARP_SIZE;
-  __shared__ acc_t reduce_shared[WARPS * 2];
+  constexpr int WARPS_ALLOC = BLOCK / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ acc_t reduce_shared[WARPS_ALLOC * 2];
   __shared__ acc_t s_mean;
   __shared__ acc_t s_rstd;
 

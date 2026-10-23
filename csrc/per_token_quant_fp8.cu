@@ -9,11 +9,10 @@
 #include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
 #include <cmath>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 
 namespace at {  
 namespace native {
@@ -71,7 +70,7 @@ inline __device__ uint8_t float_to_fp8e4m3(float f) {
         c10::detail::fp32_from_bits(denorm_mask)
       );
       result = static_cast<uint8_t>(f_bits - denorm_mask);
-    
+
     } else {
       uint8_t mant_odd = (f_bits >> 20) & 1;
       f_bits += ((uint32_t)(7 - 127) << 23) + 0x7FFFF;
@@ -118,7 +117,7 @@ inline __device__ uint32_t float_to_fp8e5m2_x4(float a, float b, float c, float 
   #endif
 }
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceMax_ROW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -129,7 +128,8 @@ __inline__ __device__ T WarpReduceMax_ROW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceMax_ROW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceMax_ROW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -160,15 +160,17 @@ __global__ void per_token_quant_fp8_kernel(
     float* scale_out, const int hidden_size) {
 
     int bid = blockIdx.x;  
-    
+
     constexpr int share_size = block_size / C10_WARP_SIZE;
-    __shared__ float val_shared[share_size];
+
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float val_shared[share_size_alloc];
     using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;
     using VecFp8Type = at::native::memory::aligned_vector<uint8_t, VEC>;
 
     int tid = threadIdx.x;
     int tcol = hidden_size / VEC;
-    
+
     scalar_t input_vec[VEC];
     int64_t idx = bid * tcol + tid;
     idx *= VEC;
@@ -240,7 +242,8 @@ __global__ void per_token_quant_fp8_kernel_general(
     int tid = threadIdx.x;
     
     constexpr int share_size = block_size / C10_WARP_SIZE;
-    __shared__ float val_shared[share_size];
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float val_shared[share_size_alloc];
     
     int64_t row_offset = (int64_t)bid * hidden_size;
     const scalar_t* row_in = input + row_offset;

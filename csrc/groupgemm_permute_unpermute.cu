@@ -6,6 +6,7 @@
 #include <ATen/cuda/detail/IndexUtils.cuh>
 #include <ATen/cuda/detail/TensorInfo.cuh>
 #include <c10/cuda/CUDAMathCompat.h>
+#include <c10/macros/Macros.h>
 
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
@@ -99,7 +100,7 @@ namespace native{
         const int lid = threadIdx.x % C10_WARP_SIZE;
         const int wid = threadIdx.x / C10_WARP_SIZE;
         const int block_size=blockDim.x;
-        const int share_size=block_size/C10_WARP_SIZE;
+        const int share_size=block_size / C10_WARP_SIZE;
         val = WarpReduceSum(val);
         if(block_size==C10_WARP_SIZE)return val;
         if (lid == 0&&wid<share_size) {

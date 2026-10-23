@@ -14,12 +14,10 @@
 #include <ATen/cuda/detail/TensorInfo.cuh>
 #include <ATen/cuda/CUDAGraphsUtils.cuh>
 #include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <torch/autograd.h>
 #include <hiprand_kernel.h>
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 using namespace std;
 namespace at {
 namespace native {
@@ -423,7 +421,8 @@ void dispatch_scaled_upper_triang_masked_softmax_dropout_forward(
         int batch_count = attn_batches * seq_len;
 
         // This value must match the WARP_SIZE constexpr value computed inside softmax_warp_forward.
-        int warp_size = (next_power_of_two < C10_WARP_SIZE) ? next_power_of_two : C10_WARP_SIZE;
+        int warp_size = lightop::compat::warp_size();
+        warp_size = (next_power_of_two < warp_size) ? next_power_of_two : warp_size;
 
         // This value must match the WARP_BATCH constexpr value computed inside softmax_warp_forward.
         int batches_per_warp = (next_power_of_two <= 128) ? 2 : 1;
@@ -534,7 +533,8 @@ void dispatch_scaled_upper_triang_masked_softmax_dropout_backward(
         int batch_count = attn_batches * seq_len;
 
         // This value must match the WARP_SIZE constexpr value computed inside softmax_warp_backward.
-        int warp_size = (next_power_of_two < C10_WARP_SIZE) ? next_power_of_two : C10_WARP_SIZE;
+        int warp_size = lightop::compat::warp_size();
+        warp_size = (next_power_of_two < warp_size) ? next_power_of_two : warp_size;
 
         // This value must match the WARP_BATCH constexpr value computed inside softmax_warp_backward.
         int batches_per_warp = (next_power_of_two <= 128) ? 2 : 1;

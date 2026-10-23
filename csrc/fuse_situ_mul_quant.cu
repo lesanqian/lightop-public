@@ -4,6 +4,8 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/all.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <ATen/native/cuda/MemoryAccess.cuh>
 
 #include <cmath>
@@ -75,7 +77,9 @@ __global__ void situ_mul_quant_kernel_generic(
   const int64_t output_offset = token_idx * hidden;
 
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ float shared_mem[share_size];
+
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float shared_mem[share_size_alloc];
   __shared__ float s_token_scale;
 
   float row_max = 0.0f;
@@ -127,7 +131,9 @@ __global__ void situ_mul_quant_kernel_vec(
   const int idx  = tidx * VEC;
 
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ float val_shared[share_size];
+
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float val_shared[share_size_alloc];
   __shared__ float s_token_scale;
 
   const int64_t x_index = token_idx * 2 * hidden + idx;

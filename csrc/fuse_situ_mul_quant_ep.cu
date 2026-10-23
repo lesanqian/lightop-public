@@ -4,6 +4,8 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/all.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <ATen/native/cuda/MemoryAccess.cuh>
 
 #include <cmath>
@@ -171,7 +173,9 @@ __device__ __forceinline__ void situ_mul_quant_ep_stride_body(
   const int idx  = tidx * VEC;
 
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ float   val_shared[share_size];
+
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float   val_shared[share_size_alloc];
   __shared__ float   s_token_scale;
   __shared__ int32_t s_valid_m;
 
@@ -328,7 +332,9 @@ __global__ void situ_mul_quant_ep_kernel_stride_generic(
   const int32_t expert = blockIdx.y;
 
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ float   shared_mem[share_size];
+
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float   shared_mem[share_size_alloc];
   __shared__ float   s_token_scale;
   __shared__ int32_t s_valid_m;
 

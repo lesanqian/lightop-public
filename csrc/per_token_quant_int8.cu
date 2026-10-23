@@ -4,6 +4,7 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/native/cuda/MemoryAccess.cuh>
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/macros/Macros.h>
 #ifdef USE_ROCM
 #include <hip/hip_runtime.h>
 #else
@@ -15,9 +16,6 @@
 #include <cstdint>
 #include <limits>
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 
 namespace at {
 namespace native {

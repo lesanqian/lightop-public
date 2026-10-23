@@ -4,6 +4,8 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/all.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <ATen/native/cuda/MemoryAccess.cuh>
 
 #include <cmath>
@@ -13,9 +15,6 @@
 // #include "../dispatch_utils.h"
 
 
-#ifdef TORCH_VERSION_OVER_290
-#define C10_WARP_SIZE C10_WARP_SIZE_STATIC
-#endif
 
 namespace at {
 namespace native {
@@ -52,7 +51,7 @@ AT_DISPATCH_SWITCH(TYPE, NAME, VLLM_DISPATCH_CASE_FLOATING_TYPES(__VA_ARGS__))
   #define VLLM_LDG(arg) *(arg)
 #endif
 
-template <typename T,int reducesize=C10_WARP_SIZE>
+template <typename T,int reducesize=C10_WARP_SIZE_UPPER_BOUND>
 __inline__ __device__ T WarpReduceMax_ROW(T val) {
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
@@ -63,7 +62,8 @@ __inline__ __device__ T WarpReduceMax_ROW(T val) {
 
 template <typename T,int block_size=512>
 __inline__ __device__ T BlockReduceMax_ROW(T val, T* shared) {
-  constexpr int share_size=block_size/C10_WARP_SIZE;
+  constexpr int share_size=block_size / C10_WARP_SIZE;
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
   val = WarpReduceMax_ROW<T>(val);
   if constexpr(block_size==C10_WARP_SIZE)
   {
@@ -115,7 +115,9 @@ __global__ void moe_swiglu_dynamic_quant_kernel_gernel(
   const int64_t output_offset = token_idx * d;
 
   constexpr int share_size = block_size / C10_WARP_SIZE;
-  __shared__ float shared_mem[share_size];
+
+  constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ float shared_mem[share_size_alloc];
   __shared__ int s_expert_index; 
   
   if (threadIdx.x == 0) {
@@ -154,9 +156,9 @@ __global__ void moe_swiglu_dynamic_quant_kernel_gernel(
       float val = static_cast<float>(compute<scalar_t, act_first>(x, y)) * smooth_val;
       row_max = fmaxf(row_max, fabsf(val));
     }
-    
+
     row_max = BlockReduceMax_ROW<float, block_size>(row_max, shared_mem);
-    
+
     __shared__ float s_token_scale; 
     if (threadIdx.x == 0) {
         s_token_scale = row_max;  
@@ -311,7 +313,8 @@ __global__ void moe_swiglu_dynamic_quant_kernel(
     __shared__ int ses[MAX_EXPERTS]; 
     
     constexpr int share_size = block_size / C10_WARP_SIZE;
-    __shared__ float val_shared[share_size];
+    constexpr int share_size_alloc = block_size / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ float val_shared[share_size_alloc];
 
     __shared__ int s_expert_index;
     using VecType = at::native::memory::aligned_vector<scalar_t, VEC>;

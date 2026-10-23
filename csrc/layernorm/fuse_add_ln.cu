@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm.h"
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 
 namespace
 {
@@ -25,7 +27,8 @@ __global__ void add_layernorm_forward_kernel(scalar_t *input, scalar_t *residual
     using WelfordType        = WelfordData<T_ACC, int, T_ACC>;
     using WelfordOp          = WelfordOps<T_ACC, T_ACC, int, T_ACC, thrust::pair<T_ACC, T_ACC>>;
     constexpr int share_size = blocksize / C10_WARP_SIZE;
-    __shared__ typename std::aligned_storage<sizeof(WelfordType), alignof(WelfordType)>::type val_shared[share_size];
+    constexpr int share_size_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND;
+    __shared__ typename std::aligned_storage<sizeof(WelfordType), alignof(WelfordType)>::type val_shared[share_size_alloc];
     __shared__ T_ACC                                                                          s_mean;
     __shared__ T_ACC                                                                          s_rstd;
     WelfordType *val_shared_ptr = reinterpret_cast<WelfordType *>(val_shared);

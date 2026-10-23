@@ -3,6 +3,8 @@
 
 // Mixed-precision LayerNorm: activations Half/BFloat16, weight/bias float32 (standalone .cu).
 #include "layernorm.h"
+#include <c10/macros/Macros.h>
+#include "warp_size_compat.h"
 #include <c10/util/MaybeOwned.h>
 #include <type_traits>
 
@@ -123,8 +125,9 @@ __global__ void mixedln_fp32w_fwd_fast_welford(scalar_t* input,scalar_t* ret,flo
   using T_ACC = acc_type<scalar_t, true>;
   using WelfordType = WelfordData<T_ACC, int, T_ACC>;
   using WelfordOp = WelfordOps<T_ACC, T_ACC, int, T_ACC, thrust::pair<T_ACC, T_ACC>>;
-  constexpr int share_size=blocksize/C10_WARP_SIZE;
-  __shared__ typename std::aligned_storage<sizeof(WelfordType), alignof(WelfordType)>::type val_shared[share_size];
+  constexpr int share_size=blocksize / C10_WARP_SIZE;
+  constexpr int share_size_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND;
+  __shared__ typename std::aligned_storage<sizeof(WelfordType), alignof(WelfordType)>::type val_shared[share_size_alloc];
   __shared__ T_ACC s_mean;
   __shared__ T_ACC s_rstd;
   WelfordType* val_shared_ptr = reinterpret_cast<WelfordType*>(val_shared);
@@ -187,8 +190,9 @@ __global__ void mixedln_fp32w_fwd_stage1(scalar_t* input,float *sums,int lines_p
   int threadidx=threadIdx.x;
   int block_cols=blockidx*cols;
   using T_ACC = acc_type<scalar_t, true>;
-  constexpr int share_size=blocksize/C10_WARP_SIZE*2;
-  __shared__ float val_shared[share_size];
+  constexpr int share_size=blocksize / C10_WARP_SIZE*2;
+  constexpr int share_size_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND*2;
+  __shared__ float val_shared[share_size_alloc];
   using VecTpye=memory::aligned_vector<scalar_t, VEC>;
   using new_type = __change_type<scalar_t>;
   VecTpye *X=(VecTpye*)(input+block_cols);
@@ -266,8 +270,9 @@ __global__ void mixedln_fp32w_fwd_fast(scalar_t* input,scalar_t* ret,float* mean
   int threadidx=threadIdx.x;
   int block_cols=blockidx*cols;
   using T_ACC = acc_type<scalar_t, true>;
-  constexpr int share_size=blocksize/C10_WARP_SIZE*2;
-  __shared__ float val_shared[share_size];
+  constexpr int share_size=blocksize / C10_WARP_SIZE*2;
+  constexpr int share_size_alloc = blocksize / C10_WARP_SIZE_UPPER_BOUND*2;
+  __shared__ float val_shared[share_size_alloc];
   __shared__ T_ACC s_mean;
   __shared__ T_ACC s_rstd;
   using VecTpye=memory::aligned_vector<scalar_t, VEC>;

@@ -56,6 +56,8 @@
 
 using namespace std;
 
+#include "warp_size_compat.h"
+
 #if defined(__HIP_PLATFORM_HCC__)
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
@@ -282,7 +284,7 @@ inline int64_t SoftMax_getBlockSize(int ILP, int64_t dim_size) {
     
     while (block_size < (max_block_size)) block_size *= 2;
     // Launch at least a single warp - the kernel assumes that.
-    block_size = std::max(block_size, static_cast<int64_t>(at::cuda::warp_size()));
+    block_size = std::max(block_size, static_cast<int64_t>(lightop::compat::warp_size()));
     return block_size;
 }
 
@@ -724,7 +726,7 @@ void softmax_lastdim_smallsize_forward(output_t *dst, const input_t *src,
     // use 256 threads per block to maximimize gpu utilization
     constexpr int threads_per_block = 256;
 
-    int warp_size = at::cuda::warp_size();
+    int warp_size = lightop::compat::warp_size();
     warp_size = (next_power_of_two < warp_size) ? next_power_of_two : warp_size;
 
     int batches_per_warp = (threads_per_block + next_power_of_two - 1) / next_power_of_two;
@@ -791,7 +793,7 @@ void softmax_lastdim_smallsize_backward(input_t *grad_input, const output_t *gra
     // use 256 threads per block to maximimize gpu utilization
     constexpr int threads_per_block = 256;
 
-    int warp_size = at::cuda::warp_size();
+    int warp_size = lightop::compat::warp_size();
     warp_size = (next_power_of_two < warp_size) ? next_power_of_two : warp_size;
 
     int batches_per_warp = (threads_per_block + next_power_of_two - 1) / next_power_of_two;

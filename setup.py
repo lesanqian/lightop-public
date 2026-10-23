@@ -21,7 +21,6 @@ def _get_pytorch_version_int():
     return int(version[0])*100+int(version[1])*10+int(version[2])
 
 dtk_version = get_dtk_version(ROCM_HOME)
-gfx_version = torch.cuda.get_device_properties(0).gcnArchName.split(':')[0]
 torch_version = _get_pytorch_version_int()
 
 
@@ -531,6 +530,9 @@ def get_extensions():
     if torch_version_over110():
         extra_compile_args['nvcc'].append('-DTORCH_VERSION_OVER_110')
     if torch_version >= 290:
+        # 保留旧接口：历史代码里的 "#ifdef TORCH_VERSION_OVER_290 -> #define C10_WARP_SIZE
+        # C10_WARP_SIZE_STATIC" 仍然可用；新代码统一走 csrc/warp_size_compat.h 的
+        # 版本自适应兼容层，不再依赖该宏。
         extra_compile_args['nvcc'].append('-DTORCH_VERSION_OVER_290')
     op_files = glob.glob('./csrc/*.cu') + glob.glob('./csrc/*.cpp') + \
                glob.glob('./csrc/topk/*.cu') + \
