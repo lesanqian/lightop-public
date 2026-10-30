@@ -2225,16 +2225,19 @@ __forceinline__ __device__ void  MOE_W16A16_HIP_NT_prefill_kpack2_stage2_kernel(
             if(A_prefetch_level == 0) { // 预加载A矩阵
                 int A_block_buffer_load_global_offset = stage_id_num * WARP_K * bytes_per_element; 
                 int A_lds_stage_offset_loop = stage_id_num * A_lds_stage_offset; 
+                #if defined(__gfx936__) || defined(__gfx938__)
                 buffer_load_lds_tile_pad_sorted_token_dword_lds4(WARP_NUM, seqlen_A_stride, BLOCK_M, WARP_K, Element, A_ptr, A_lds, A_block_buffer_load_global_offset, A_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
                                                             vec_size, per_phase, max_phase); 
+                #endif
             }
 
             if(B_prefetch_level == 0) { // 预加载B矩阵
                 int B_block_buffer_load_global_offset = stage_id_num * WARP_K * bytes_per_element; 
                 int B_lds_stage_offset_loop = stage_id_num * B_lds_stage_offset; 
+                #if defined(__gfx936__) || defined(__gfx938__)
                 buffer_load_lds_tile_pad_weight_dword_lds4(WARP_NUM, seqlen_B_stride, BLOCK_N, WARP_K, Element, B_ptr, B_lds, B_block_buffer_load_global_offset, B_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
                                                             vec_size, per_phase, max_phase);
-
+                #endif
             }
         }
     }
@@ -2315,16 +2318,17 @@ __forceinline__ __device__ void  MOE_W16A16_HIP_NT_prefill_kpack2_stage2_kernel(
             // 预加载A矩阵
             int A_block_buffer_load_global_offset = 0; 
             int A_lds_stage_offset_loop = A_lds_stage_offset;
-
+            #if defined(__gfx936__) || defined(__gfx938__)
             buffer_load_lds_tile_pad_sorted_token_dword_lds4(WARP_NUM, seqlen_A_stride, BLOCK_M, WARP_K, Element, A_ptr, A_lds, A_block_buffer_load_global_offset, A_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
                                                         vec_size, per_phase, max_phase);                
-
+            #endif
             // 预加载B矩阵
             int B_block_buffer_load_global_offset = 0; 
             int B_lds_stage_offset_loop = B_lds_stage_offset; 
-
+            #if defined(__gfx936__) || defined(__gfx938__)
             buffer_load_lds_tile_pad_weight_dword_lds4(WARP_NUM, seqlen_B_stride, BLOCK_N, WARP_K, Element, B_ptr, B_lds, B_block_buffer_load_global_offset, B_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
                                                     vec_size, per_phase, max_phase);  
+            #endif
         }
 
         vmcnt_wait(((BLOCK_N * WARP_K) / (vec_size*64) / WARP_NUM + ((BLOCK_M * WARP_K) / (vec_size * 64)/WARP_NUM)) * (STAGES - 1));
@@ -2369,16 +2373,17 @@ __forceinline__ __device__ void  MOE_W16A16_HIP_NT_prefill_kpack2_stage2_kernel(
             // 预加载A矩阵
             int A_block_buffer_load_global_offset = 0; 
             int A_lds_stage_offset_loop = 0;
-
+            #if defined(__gfx936__) || defined(__gfx938__)
             buffer_load_lds_tile_pad_sorted_token_dword_lds4(WARP_NUM, seqlen_A_stride, BLOCK_M, WARP_K, Element, A_ptr, A_lds, A_block_buffer_load_global_offset, A_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
                                                         vec_size, per_phase, max_phase);                
-
+            #endif
             // 预加载B矩阵
             int B_block_buffer_load_global_offset = 0; 
             int B_lds_stage_offset_loop = 0; 
-
+            #if defined(__gfx936__) || defined(__gfx938__)
             buffer_load_lds_tile_pad_weight_dword_lds4(WARP_NUM, seqlen_B_stride, BLOCK_N, WARP_K, Element, B_ptr, B_lds, B_block_buffer_load_global_offset, B_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
                                                     vec_size, per_phase, max_phase);  
+            #endif
             }
             vmcnt_wait(((BLOCK_N * WARP_K) / (vec_size*64) / WARP_NUM + ((BLOCK_M * WARP_K) / (vec_size * 64)/WARP_NUM)) * (STAGES - 1));            
         }
@@ -2572,8 +2577,10 @@ __forceinline__ __device__ void  MOE_W16A16_HIP_NT_prefill_kernel(
             if(A_prefetch_level == 0) { // 预加载A矩阵
                 int A_block_buffer_load_global_offset = stage_id_num * WARP_K * bytes_per_element; 
                 int A_lds_stage_offset_loop = stage_id_num * A_lds_stage_offset; 
+                #if defined(__gfx936__) || defined(__gfx938__)
                 buffer_load_lds_tile_pad_sorted_token(WARP_NUM, seqlen_A_stride, BLOCK_M, WARP_K, Element, A_ptr, A_lds, A_block_buffer_load_global_offset, A_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
                                                             vec_size, per_phase, max_phase); 
+                #endif
             }
 
             if(B_prefetch_level == 0) { // 预加载B矩阵
@@ -2581,7 +2588,6 @@ __forceinline__ __device__ void  MOE_W16A16_HIP_NT_prefill_kernel(
                 int B_lds_stage_offset_loop = stage_id_num * B_lds_stage_offset; 
                 buffer_load_lds_tile_pad_weight(WARP_NUM, seqlen_B_stride, BLOCK_N, WARP_K, Element, B_ptr, B_lds, B_block_buffer_load_global_offset, B_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
                                                             vec_size, per_phase, max_phase);
-
             }
         }
     }
@@ -2625,9 +2631,10 @@ __forceinline__ __device__ void  MOE_W16A16_HIP_NT_prefill_kernel(
             // 预加载A矩阵
             int A_block_buffer_load_global_offset = (STAGES - 1) * WARP_K * bytes_per_element; 
             int A_lds_stage_offset_loop = ((k+(STAGES - 1)) & (STAGES - 1)) * A_lds_stage_offset; 
+            #if defined(__gfx936__) || defined(__gfx938__)
             buffer_load_lds_tile_pad_sorted_token(WARP_NUM, seqlen_A_stride, BLOCK_M, WARP_K, Element, A_ptr, A_lds, A_block_buffer_load_global_offset, A_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
                                                         vec_size, per_phase, max_phase);                
-
+            #endif
             // 预加载B矩阵
             int B_block_buffer_load_global_offset = (STAGES - 1) * WARP_K * bytes_per_element; 
             int B_lds_stage_offset_loop = ((k+(STAGES - 1)) & (STAGES - 1)) * B_lds_stage_offset; 
@@ -3996,16 +4003,20 @@ __forceinline__ __device__ void  MOE_W16A16_HIP_NT_prefill_kpack2_stage1_kernel(
 
             if(A_prefetch_level == 0) { // 预加载A矩阵
                 int A_block_buffer_load_global_offset = stage_id_num * WARP_K * bytes_per_element; 
-                int A_lds_stage_offset_loop = stage_id_num * A_lds_stage_offset; 
+                int A_lds_stage_offset_loop = stage_id_num * A_lds_stage_offset;
+                #if defined(__gfx936__) || defined(__gfx938__)
                 buffer_load_lds_tile_pad_sorted_token_dword_lds4(WARP_NUM, seqlen_A_stride, BLOCK_M, WARP_K, Element, A_ptr, A_lds, A_block_buffer_load_global_offset, A_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
-                                                            vec_size, per_phase, max_phase); 
+                                                            vec_size, per_phase, max_phase);
+                #endif
             }
 
             if(B_prefetch_level == 0) { // 预加载B矩阵
                 int B_block_buffer_load_global_offset = stage_id_num * WARP_K * bytes_per_element; 
-                int B_lds_stage_offset_loop = stage_id_num * B_lds_stage_offset; 
+                int B_lds_stage_offset_loop = stage_id_num * B_lds_stage_offset;
+                #if defined(__gfx936__) || defined(__gfx938__)
                 buffer_load_lds_tile_pad_weight_dword_lds4(WARP_NUM, seqlen_B_stride, BLOCK_N, WARP_K, Element, B_ptr, B_lds, B_block_buffer_load_global_offset, B_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
                                                             vec_size, per_phase, max_phase);
+                #endif
 
             }
         }
@@ -4055,16 +4066,17 @@ __forceinline__ __device__ void  MOE_W16A16_HIP_NT_prefill_kpack2_stage1_kernel(
             // 预加载A矩阵
             int A_block_buffer_load_global_offset = 0; 
             int A_lds_stage_offset_loop = 0;
-
+            #if defined(__gfx936__) || defined(__gfx938__)
             buffer_load_lds_tile_pad_sorted_token_dword_lds4(WARP_NUM, seqlen_A_stride, BLOCK_M, WARP_K, Element, A_ptr, A_lds, A_block_buffer_load_global_offset, A_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
                                                         vec_size, per_phase, max_phase);                
-
+            #endif
             // 预加载B矩阵
             int B_block_buffer_load_global_offset = 0; 
             int B_lds_stage_offset_loop = 0; 
-
+            #if defined(__gfx936__) || defined(__gfx938__)
             buffer_load_lds_tile_pad_weight_dword_lds4(WARP_NUM, seqlen_B_stride, BLOCK_N, WARP_K, Element, B_ptr, B_lds, B_block_buffer_load_global_offset, B_lds_stage_offset_loop, BLOCK_K, warp_id, lane_id,
-                                                    vec_size, per_phase, max_phase);  
+                                                    vec_size, per_phase, max_phase);
+            #endif
         }
 
         vmcnt_wait(0);

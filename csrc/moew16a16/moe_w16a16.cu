@@ -1428,7 +1428,7 @@ torch::Tensor moe_gemm_w16a16(torch::Tensor input,
               it->second(params_in3);
             } else {
               printf("kernel_maps_gemm1_prefill_marlin_w16a16: No matching kernel configuration found, using default settings \n");
-              launch_MOE_W16A16_MARLIN_HIP_NT_UP_prefill<16, 64, 128, 16, 16, 64, bhalf_t>(params_in3);
+              launch_MOE_W16A16_MARLIN_HIP_NT_UP_prefill<32, 128, 128, 16, 32, 64, bhalf_t>(params_in3);
             }
         }else{ //decode
           auto it = kernel_maps_gemm1_decode_marlin_w16a16_bhalf_t.find(mode);
@@ -1468,7 +1468,7 @@ torch::Tensor moe_gemm_w16a16(torch::Tensor input,
               it->second(params_in3);
             } else {
               printf("kernel_maps_gemm2_prefill_marlin_w16a16: No matching kernel configuration found, using default settings \n");
-              launch_MOE_W16A16_MARLIN_HIP_NT_DOWN_prefill<16, 64, 128, 16, 16, 64, bhalf_t>(params_in3);
+              launch_MOE_W16A16_MARLIN_HIP_NT_DOWN_prefill<32, 128, 128, 16, 32, 64, bhalf_t>(params_in3);
             }
         }else{
           auto it = kernel_maps_gemm2_decode_marlin_w16a16_bhalf_t.find(mode);
@@ -1656,7 +1656,7 @@ torch::Tensor moe_gemm_w16a16(torch::Tensor input,
               it->second(params_in3);
             } else {
               printf("kernel_maps_gemm1_prefill_marlin_w16a16: No matching kernel configuration found, using default settings \n");
-              launch_MOE_W16A16_MARLIN_HIP_NT_UP_prefill<16, 64, 128, 16, 16, 64, half>(params_in3);
+              launch_MOE_W16A16_MARLIN_HIP_NT_UP_prefill<32, 128, 128, 16, 32, 64, half>(params_in3);
             }
         }else{ //decode
           auto it = kernel_maps_gemm1_decode_marlin_w16a16_half.find(mode);
@@ -1696,7 +1696,7 @@ torch::Tensor moe_gemm_w16a16(torch::Tensor input,
               it->second(params_in3);
             } else {
               printf("kernel_maps_gemm2_prefill_marlin_w16a16: No matching kernel configuration found, using default settings \n");
-              launch_MOE_W16A16_MARLIN_HIP_NT_DOWN_prefill<16, 64, 128, 16, 16, 64, half>(params_in3);
+              launch_MOE_W16A16_MARLIN_HIP_NT_DOWN_prefill<32, 128, 128, 16, 32, 64, half>(params_in3);
             }
         }else{
           auto it = kernel_maps_gemm2_decode_marlin_w16a16_half.find(mode);

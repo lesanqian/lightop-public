@@ -165,7 +165,7 @@ __device__ void ms_deform_attn_col2im_bilinear(
     v1 = bottom_data[ptr1];
     grad_h_weight -= hw * v1;
     grad_w_weight -= hh * v1;
-    atomicAdd(grad_value + ptr1, w1 * top_grad_value);
+    __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_value + ptr1), w1 * top_grad_value);
   }
   scalar_t v2 = 0;
   if (h_low >= 0 && w_high <= width - 1) {
@@ -173,7 +173,7 @@ __device__ void ms_deform_attn_col2im_bilinear(
     v2 = bottom_data[ptr2];
     grad_h_weight -= lw * v2;
     grad_w_weight += hh * v2;
-    atomicAdd(grad_value + ptr2, w2 * top_grad_value);
+    __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_value + ptr2), w2 * top_grad_value);
   }
   scalar_t v3 = 0;
   if (h_high <= height - 1 && w_low >= 0) {
@@ -181,7 +181,7 @@ __device__ void ms_deform_attn_col2im_bilinear(
     v3 = bottom_data[ptr3];
     grad_h_weight += hw * v3;
     grad_w_weight -= lh * v3;
-    atomicAdd(grad_value + ptr3, w3 * top_grad_value);
+    __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_value + ptr3), w3 * top_grad_value);
   }
   scalar_t v4 = 0;
   if (h_high <= height - 1 && w_high <= width - 1) {
@@ -189,7 +189,7 @@ __device__ void ms_deform_attn_col2im_bilinear(
     v4 = bottom_data[ptr4];
     grad_h_weight += lw * v4;
     grad_w_weight += lh * v4;
-    atomicAdd(grad_value + ptr4, w4 * top_grad_value);
+    __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_value + ptr4), w4 * top_grad_value);
   }
 
   const scalar_t val = (w1 * v1 + w2 * v2 + w3 * v3 + w4 * v4);
@@ -311,28 +311,28 @@ __device__ void ms_deform_attn_col2im_bilinear_vec4(
     const int ptr1 = h_low_ptr_offset + w_low_ptr_offset + base_ptr;
     scalar_t v1 = valid1 ? bottom_data[ptr1] : scalar_t(0);
     if (valid1) {
-      atomicAdd(grad_value + ptr1, w1 * top_grad_val);
+      __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_value + ptr1), w1 * top_grad_val);
     }
 
     const bool valid2 = (h_low >= 0 && w_high <= width - 1);
     const int ptr2 = h_low_ptr_offset + w_high_ptr_offset + base_ptr;
     scalar_t v2 = valid2 ? bottom_data[ptr2] : scalar_t(0);
     if (valid2) {
-      atomicAdd(grad_value + ptr2, w2 * top_grad_val);
+      __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_value + ptr2), w2 * top_grad_val);
     }
 
     const bool valid3 = (h_high <= height - 1 && w_low >= 0);
     const int ptr3 = h_high_ptr_offset + w_low_ptr_offset + base_ptr;
     scalar_t v3 = valid3 ? bottom_data[ptr3] : scalar_t(0);
     if (valid3) {
-      atomicAdd(grad_value + ptr3, w3 * top_grad_val);
+      __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_value + ptr3), w3 * top_grad_val);
     }
 
     const bool valid4 = (h_high <= height - 1 && w_high <= width - 1);
     const int ptr4 = h_high_ptr_offset + w_high_ptr_offset + base_ptr;
     scalar_t v4 = valid4 ? bottom_data[ptr4] : scalar_t(0);
     if (valid4) {
-      atomicAdd(grad_value + ptr4, w4 * top_grad_val);
+      __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_value + ptr4), w4 * top_grad_val);
     }
 
     scalar_t grad_h_weight = -(hw * v1) - (lw * v2) + (hw * v3) + (lw * v4);
@@ -380,7 +380,7 @@ __device__ void ms_deform_attn_col2im_bilinear_gm(
     v1 = bottom_data[ptr1];
     grad_h_weight -= hw * v1;
     grad_w_weight -= hh * v1;
-    atomicAdd(grad_value + ptr1, w1 * top_grad_value);
+    __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_value + ptr1), w1 * top_grad_value);
   }
   scalar_t v2 = 0;
   if (h_low >= 0 && w_high <= width - 1) {
@@ -388,7 +388,7 @@ __device__ void ms_deform_attn_col2im_bilinear_gm(
     v2 = bottom_data[ptr2];
     grad_h_weight -= lw * v2;
     grad_w_weight += hh * v2;
-    atomicAdd(grad_value + ptr2, w2 * top_grad_value);
+    __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_value + ptr2), w2 * top_grad_value);
   }
   scalar_t v3 = 0;
   if (h_high <= height - 1 && w_low >= 0) {
@@ -396,7 +396,7 @@ __device__ void ms_deform_attn_col2im_bilinear_gm(
     v3 = bottom_data[ptr3];
     grad_h_weight += hw * v3;
     grad_w_weight -= lh * v3;
-    atomicAdd(grad_value + ptr3, w3 * top_grad_value);
+    __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_value + ptr3), w3 * top_grad_value);
   }
   scalar_t v4 = 0;
   if (h_high <= height - 1 && w_high <= width - 1) {
@@ -404,13 +404,13 @@ __device__ void ms_deform_attn_col2im_bilinear_gm(
     v4 = bottom_data[ptr4];
     grad_h_weight += lw * v4;
     grad_w_weight += lh * v4;
-    atomicAdd(grad_value + ptr4, w4 * top_grad_value);
+    __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_value + ptr4), w4 * top_grad_value);
   }
 
   const scalar_t val = (w1 * v1 + w2 * v2 + w3 * v3 + w4 * v4);
-  atomicAdd(grad_attn_weight, top_grad * val);
-  atomicAdd(grad_sampling_loc, width * grad_w_weight * top_grad_value);
-  atomicAdd(grad_sampling_loc + 1, height * grad_h_weight * top_grad_value);
+  __builtin_amdgcn_global_atomic_fadd_f32((float*)grad_attn_weight, top_grad * val);
+  __builtin_amdgcn_global_atomic_fadd_f32((float*)grad_sampling_loc, width * grad_w_weight * top_grad_value);
+  __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_sampling_loc + 1), height * grad_h_weight * top_grad_value);
 }
 
 
@@ -891,11 +891,16 @@ __global__ void ms_deformable_col2im_gpu_kernel_3d_grid(
                         int ptr_idx = r_arr[i] * h_str + c_arr[i] * w_str + base;
                         float4 v = v_ptr[ptr_idx];
                         
-                        float4_vec g_vec = { 
+                        float4_vec g_vec = {
                             raw_top_g.x * weight * w_arr[i], raw_top_g.y * weight * w_arr[i],
-                            raw_top_g.z * weight * w_arr[i], raw_top_g.w * weight * w_arr[i] 
+                            raw_top_g.z * weight * w_arr[i], raw_top_g.w * weight * w_arr[i]
                         };
-                        __builtin_hcu_global_atomic_fadd_f32_x4(g_v_level_ptr + ptr_idx * 4, g_vec);
+                        // gfx928/gfx936/gfx938 上 __builtin_hcu_global_atomic_fadd_f32_x4
+                        // 会 lower 成 unsupported cmpxchg，统一退化为 4 次标量 f32 原子加
+                        __builtin_amdgcn_global_atomic_fadd_f32((float*)(g_v_level_ptr + ptr_idx * 4 + 0), g_vec[0]);
+                        __builtin_amdgcn_global_atomic_fadd_f32((float*)(g_v_level_ptr + ptr_idx * 4 + 1), g_vec[1]);
+                        __builtin_amdgcn_global_atomic_fadd_f32((float*)(g_v_level_ptr + ptr_idx * 4 + 2), g_vec[2]);
+                        __builtin_amdgcn_global_atomic_fadd_f32((float*)(g_v_level_ptr + ptr_idx * 4 + 3), g_vec[3]);
                         float gh_w = (i < 2 ? -1.f : 1.f) * (i % 2 == 0 ? hw : lw);
                         float gw_w = (i % 2 == 0 ? -1.f : 1.f) * (i < 2 ? hh : lh);
                         
@@ -1619,9 +1624,9 @@ __global__ void ms_deformable_col2im_gpu_kernel_shm_reduce_v2_multi_blocks(
         }
 
         if (tid == 0) {
-          atomicAdd(grad_sampling_loc_out, cache_grad_sampling_loc[0]);
-          atomicAdd(grad_sampling_loc_out + 1, cache_grad_sampling_loc[1]);
-          atomicAdd(grad_attn_weight_out, cache_grad_attn_weight[0]);
+          __builtin_amdgcn_global_atomic_fadd_f32((float*)grad_sampling_loc_out, cache_grad_sampling_loc[0]);
+          __builtin_amdgcn_global_atomic_fadd_f32((float*)(grad_sampling_loc_out + 1), cache_grad_sampling_loc[1]);
+          __builtin_amdgcn_global_atomic_fadd_f32((float*)grad_attn_weight_out, cache_grad_attn_weight[0]);
         }
         __syncthreads();
 
@@ -2011,24 +2016,27 @@ at::Tensor ms_deform_attn_cuda_forward(
   auto output =
       at::zeros({batch, num_query, num_heads, channels}, value.options());
 
-  AT_DISPATCH_FLOATING_TYPES(
-      value.scalar_type(), "ms_deform_attn_forward_cuda", ([&] {
-        ms_deformable_im2col_cuda(
-            at::cuda::getCurrentCUDAStream(),
-            value.data_ptr<scalar_t>(),
-            spatial_shapes.data_ptr<int64_t>(),
-            level_start_index.data_ptr<int64_t>(),
-            sampling_loc.data_ptr<scalar_t>(),
-            attn_weight.data_ptr<scalar_t>(),
-            batch,            // ← 全 batch
-            spatial_size,
-            num_heads,
-            channels,
-            num_levels,
-            num_query,
-            num_point,
-            output.data_ptr<scalar_t>());
-      }));
+  TORCH_CHECK(value.scalar_type() == at::kFloat,
+              "ms_deform_attn forward on DCU/gfx938 only supports float32 "
+              "(double path triggers unsupported cmpxchg lowering)");
+  {
+    using scalar_t = float;
+    ms_deformable_im2col_cuda(
+        at::cuda::getCurrentCUDAStream(),
+        value.data_ptr<scalar_t>(),
+        spatial_shapes.data_ptr<int64_t>(),
+        level_start_index.data_ptr<int64_t>(),
+        sampling_loc.data_ptr<scalar_t>(),
+        attn_weight.data_ptr<scalar_t>(),
+        batch,            // ← 全 batch
+        spatial_size,
+        num_heads,
+        channels,
+        num_levels,
+        num_query,
+        num_point,
+        output.data_ptr<scalar_t>());
+  }
 
   output = output.view({batch, num_query, num_heads * channels});
 
@@ -2074,27 +2082,30 @@ void ms_deform_attn_cuda_backward(
   auto grad_output_ =
       grad_output.view({batch, num_query, num_heads, channels});
 
-  AT_DISPATCH_FLOATING_TYPES(
-      value.scalar_type(), "ms_deform_attn_backward_cuda_fused", ([&] {
-        ms_deformable_col2im_cuda(
-            at::cuda::getCurrentCUDAStream(),
-            grad_output_.data_ptr<scalar_t>(),
-            value.data_ptr<scalar_t>(),
-            spatial_shapes.data_ptr<int64_t>(),
-            level_start_index.data_ptr<int64_t>(),
-            sampling_loc.data_ptr<scalar_t>(),
-            attn_weight.data_ptr<scalar_t>(),
-            batch,
-            spatial_size,
-            num_heads,
-            channels,
-            num_levels,
-            num_query,
-            num_point,
-            grad_value.data_ptr<scalar_t>(),
-            grad_sampling_loc.data_ptr<scalar_t>(),
-            grad_attn_weight.data_ptr<scalar_t>());
-      }));
+  TORCH_CHECK(value.scalar_type() == at::kFloat,
+              "ms_deform_attn backward on DCU/gfx938 only supports float32 "
+              "(double atomicAdd triggers unsupported cmpxchg lowering)");
+  {
+    using scalar_t = float;
+    ms_deformable_col2im_cuda(
+        at::cuda::getCurrentCUDAStream(),
+        grad_output_.data_ptr<scalar_t>(),
+        value.data_ptr<scalar_t>(),
+        spatial_shapes.data_ptr<int64_t>(),
+        level_start_index.data_ptr<int64_t>(),
+        sampling_loc.data_ptr<scalar_t>(),
+        attn_weight.data_ptr<scalar_t>(),
+        batch,
+        spatial_size,
+        num_heads,
+        channels,
+        num_levels,
+        num_query,
+        num_point,
+        grad_value.data_ptr<scalar_t>(),
+        grad_sampling_loc.data_ptr<scalar_t>(),
+        grad_attn_weight.data_ptr<scalar_t>());
+  }
 }
 }
 }
