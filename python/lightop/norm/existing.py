@@ -37,11 +37,23 @@ from ..rmsnorm import (
 
 rms_norm_opt = lightop_native.rms_norm_opt
 fused_add_rms_norm_opt = lightop_native.fused_add_rms_norm_opt
-layer_norm_opt = lightop_native.layer_norm_opt
-fused_add_layer_norm_opt = lightop_native.fused_add_layer_norm_opt
-layer_norm_fwd_1pass_opt = lightop_native.layer_norm_fwd_1pass_opt
 rms_norm_no_weight = lightop_native.rms_norm_no_weight
 rmsnorm_forward_autograd = lightop_native.rmsnorm_forward_autograd
+
+
+# LayerNorm may be absent when only the RMSNorm native module was built.
+_LAZY_OP_ALIASES = (
+    "layer_norm_opt",
+    "fused_add_layer_norm_opt",
+    "layer_norm_fwd_1pass_opt",
+)
+
+
+def __getattr__(name):
+    if name in _LAZY_OP_ALIASES:
+        return getattr(lightop_native, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "rms_norm_dynamic_per_token_quant_sglang",

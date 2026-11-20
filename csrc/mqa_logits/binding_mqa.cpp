@@ -4,7 +4,7 @@
 // Phase-1 pilot: split the "MQA logits" family bindings into a dedicated
 // extension module (lightop._ext.module_mqa_logits), mirroring AITER's "one
 // operator backend = one module_xxx.so" layout and following the Phase-0
-// norm pilot (csrc/kernels/rmsnorm/binding_norm.cpp).
+// RMSNorm module (csrc/kernels/rmsnorm/binding_rmsnorm.cpp).
 //
 // Scope (all definitions live inside the MQA family directories of this tree):
 //   csrc/mqa_logits/                  (incl. bf16/, int8/, fp8/)

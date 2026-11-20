@@ -11,8 +11,6 @@ from .existing import (
     GroupNorm,
     LayerNorm,
     LayerNormMixedFp32Weight,
-    layer_norm_fwd_1pass_opt,
-    layer_norm_opt,
     layer_norm,
     RMSNorm,
     RMSNormAdd,
@@ -23,7 +21,6 @@ from .existing import (
     fuse_fill_rms_x2_concat,
     fused_add_rms_norm,
     fused_add_rms_norm_opt,
-    fused_add_layer_norm_opt,
     fused_add_layer_norm,
     fused_rms_norm_contiguous,
     gemma_fused_add_rmsnorm,
@@ -42,15 +39,32 @@ from .existing import (
     rmsnorm_forward_autograd,
 )
 
-_NATIVE_APIS = {"lm_faster_rmsquant"}
+# Resolve optional groups only when requested, as in lightop.attention.
+_LAZY_EXPORTS = {
+    name: module
+    for module, names in {
+        ".existing": (
+            "layer_norm_opt",
+            "fused_add_layer_norm_opt",
+            "layer_norm_fwd_1pass_opt",
+        ),
+        ".native": ("lm_faster_rmsquant",),
+    }.items()
+    for name in names
+}
 
 
 def __getattr__(name):
-    if name not in _NATIVE_APIS:
+    module = _LAZY_EXPORTS.get(name)
+    if module is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(import_module(f"{__name__}.native"), name)
+    value = getattr(import_module(module, __name__), name)
     globals()[name] = value
     return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
 
 
 __all__ = [

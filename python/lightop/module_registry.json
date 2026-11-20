@@ -1,10 +1,9 @@
 {
-    "norm": {
-        "extension": "lightop._ext.module_norm",
+    "rmsnorm": {
+        "extension": "lightop._ext.module_rmsnorm",
         "sources": [
-            "./csrc/kernels/rmsnorm/fuse_rms_add_opt.cu",
-            "./csrc/kernels/rmsnorm/fuse_rmsnorm_contiguous.cu",
-            "./csrc/kernels/rmsnorm/binding_norm.cpp"
+            "./csrc/kernels/rmsnorm/*.cu",
+            "./csrc/kernels/rmsnorm/binding_rmsnorm.cpp"
         ]
     },
     "mqa_logits": {

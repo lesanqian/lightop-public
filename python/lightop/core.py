@@ -124,7 +124,7 @@ def load_ops():
     if not backends:
         raise ImportError(
             "No LightOp native extension found. Build the full package or select "
-            "modules with LIGHTOP_MODULES=norm,mqa_logits."
+            "modules with LIGHTOP_MODULES=rmsnorm,mqa_logits."
         )
     op = _SplitOps(backends)
     sys.modules["lightop.op"] = op

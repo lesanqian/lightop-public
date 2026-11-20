@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Internal namespace for LightOp's split native extension modules.
 
-Each focused extension (e.g. ``lightop._ext.module_norm``) is installed as a
+Each focused extension (e.g. ``lightop._ext.module_rmsnorm``) is installed as a
 ``.so`` inside this package. See ``lightop/core.py`` for the aggregator that fans
 ``op.<name>`` out across these modules.
 """
