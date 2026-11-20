@@ -181,6 +181,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("max_context_len"), py::arg("clean_logits") = true,
         py::arg("num_warps") = 4, py::arg("persistent_ctas") = 0,
         py::arg("group_size") = 1);
+  // New in upstream master (e4484467, "support partial query groups in
+  // sampled paged MQA"): sampled paged MQA top-k. Defined in
+  // csrc/mqa_logits/paged/paged_mqa_logits_persisten.cu and declared in the
+  // matching header, both already included above.
+  m.def("paged_mqa_topk_sampled_int8", &lightop::deep_gemm::paged_mqa_topk_sampled_int8,
+        py::arg("q"), py::arg("fused_kv_cache"), py::arg("weights"),
+        py::arg("context_lens"), py::arg("block_table"), py::arg("page_table_1"),
+        py::arg("cu_seqlens_q"), py::arg("max_context_len"));
   m.def("paged_mqa_logits_fp4", &lightop::deep_gemm::paged_mqa_logits_fp4,
         "DeepGEMM fp8_fp4_paged_mqa_logits (clean_logits=False) on the fused FP4 index-K pool",
         py::arg("q"), py::arg("q_sf"), py::arg("kv_cache"), py::arg("weights"),
