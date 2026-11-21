@@ -7,6 +7,7 @@ csrc/*/*.hip
 csrc/*/*_hip.cuh
 csrc/*/*_hip.hpp
 python/lightop/version.py
+python/lightop/_op_registry.py
 __pycache__/*
 csrc/hip_*.cpp
 csrc/hip_*.h

@@ -43,6 +43,7 @@
 #include "sparse/prefill_sparse_sort.h"
 #include "sparse/prefill_sparse_fusion.h"
 #include "../kernels/index_k_int8_dequant/index_k_int8_dequant.h"
+#include "mqa_logits_api.h"
 
 namespace at::native {
 // Declaration mirrored verbatim from csrc/pybind/export.cpp; defined in
@@ -137,6 +138,25 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("KV_scale") = torch::nullopt, 
       py::arg("clean_logits") = true,
       py::arg("D_out") = torch::nullopt);
+  // mqa_logits_topk_sampled_int8 is defined in csrc/mqa_logits/int8/ and was only
+  // bound in export.cpp upstream; register it here so the split MQA module owns it.
+  m.def("mqa_logits_topk_sampled_int8", &lightop::mqa_int8::mqa_logits_topk_sampled_int8,
+      py::arg("q"),
+      py::arg("k"),
+      py::arg("weights"),
+      py::arg("kv_scale"),
+      py::arg("starts"),
+      py::arg("ends"),
+      py::arg("offsets"),
+      py::arg("sorted_values") = py::none(),
+      py::arg("next_thresholds") = py::none(),
+      py::arg("stats") = py::none(),
+      py::arg("parallel_histogram") = true,
+      py::arg("fallback_workspace_rows") = 0,
+      py::arg("reuse_full_window") = true,
+      py::arg("sort_topk") = true,
+      py::arg("min_sample_k") = 131072,
+      py::arg("direct_candidate_emit") = false);
   // --- verbatim from csrc/pybind/export.cpp ---
   m.def("get_paged_mqa_logits_metadata", &lightop::deep_gemm::get_paged_mqa_logits_metadata,"get_paged_mqa_logits_metadata");
   m.def("dsv41_mqa_query_lens", &lightop::fp4_mqa::dsv41_mqa_query_lens,
