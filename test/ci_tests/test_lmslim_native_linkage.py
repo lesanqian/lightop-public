@@ -19,15 +19,18 @@ PACKAGE = os.environ.get("LIGHTOP_TEST_PACKAGE", "lightop")
 def native():
     package = importlib.import_module(PACKAGE)
     print("package:", package.__file__)
-    print("extension:", package.op.__file__)
-    return package.op
+    backend = importlib.import_module(package.op._lmslimquant_rocblas_gemm_fp16.__module__)
+    print("extension:", backend.__file__)
+    return backend
 
 
 def test_import_in_fresh_process():
     result = subprocess.run(
         [sys.executable, "-c",
          "import importlib,sys; p=importlib.import_module(sys.argv[1]); "
-         "print(p.__file__); print(p.op.__file__)", PACKAGE],
+         "print(p.__file__); "
+         "native=importlib.import_module(p.op._lmslimquant_rocblas_gemm_fp16.__module__); "
+         "print(native.__file__)", PACKAGE],
         text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         timeout=120,
     )

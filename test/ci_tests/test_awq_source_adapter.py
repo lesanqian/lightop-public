@@ -1,4 +1,5 @@
 """Exercise production AWQ entry points without either precompiled AWQ archive."""
+import importlib
 import subprocess
 import torch
 import pytest
@@ -185,7 +186,8 @@ def test_empty_gemm(m,n,k):
 
 
 def test_no_legacy_awq_archive_symbols():
-    output=subprocess.check_output(['readelf','--dyn-syms','--wide',op.__file__],text=True)
+    native = importlib.import_module(op._lmslimquant_gemm_w4a16_v2.__module__)
+    output=subprocess.check_output(['readelf','--dyn-syms','--wide',native.__file__],text=True)
     for symbol in ['_Z10gemm_w4a16PKv','_Z13input_paddingPKv',
                    '_Z24dequant_w4_gemm_colmajorPKv','w4a16_awq_cute_namespace']:
         assert symbol not in output, symbol

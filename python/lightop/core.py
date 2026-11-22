@@ -81,9 +81,24 @@ class _SplitOps(ModuleType):
     def __init__(self, backends):
         super().__init__("lightop.op")
         self.__file__ = __file__
+        self._deleted_exports = set()
         self._backends = backends
 
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        deleted = self.__dict__.get("_deleted_exports")
+        if deleted is not None:
+            deleted.discard(name)
+
+    def __delattr__(self, name):
+        # Resolve uncached exports before deleting, without mutating their owner.
+        getattr(self, name)
+        super().__delattr__(name)
+        self._deleted_exports.add(name)
+
     def __getattr__(self, name):
+        if name in self._deleted_exports:
+            raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
         for backend in self._backends:
             try:
                 value = getattr(backend, name)
@@ -97,7 +112,7 @@ class _SplitOps(ModuleType):
         names = set(super().__dir__())
         for backend in self._backends:
             names.update(dir(backend))
-        return sorted(names)
+        return sorted(names - self._deleted_exports)
 
 
 def load_ops():
