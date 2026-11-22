@@ -34,8 +34,8 @@ try:
     LIGHTOP_MODULES = _core["select_modules"](os.environ)
 except ValueError as exc:
     raise SystemExit(str(exc)) from None
-ENABLE_ANY_SPLIT = bool(LIGHTOP_MODULES)
 BUILD_FULL = not LIGHTOP_MODULES
+BUILD_MODULES = LIGHTOP_MODULES or tuple(MODULES)
 
 
 def _find_rocm_home() -> Optional[str]:
@@ -296,8 +296,27 @@ class BuildReleaseExtension(BuildExtension):
     def __init__(self, *args, **kwargs) -> None:
         super(BuildReleaseExtension, self).__init__(*args, **kwargs)
 
+    def _add_compile_flag(self, extension, flag):
+        # setuptools can rerun build_ext when building in-place and a wheel in
+        # one invocation. Keep PyTorch's injected flags stable across runs.
+        args = extension.extra_compile_args
+        groups = args.values() if isinstance(args, dict) else (args,)
+        for flags in groups:
+            if flag not in flags:
+                flags.append(flag)
+
     def run(self):
         super().run()
+        if not self.dry_run:
+            # Only this build's extensions belong in a wheel. In-place source
+            # extensions are kept so rebuilding one family preserves the others.
+            expected = {Path(self.build_lib, self.get_ext_filename(ext.name)).resolve()
+                        for ext in self.extensions}
+            package = Path(self.build_lib) / "lightop"
+            for directory in (package, package / "_ext"):
+                for artifact in directory.glob("*.so"):
+                    if artifact.resolve() not in expected:
+                        artifact.unlink()
         if not self.dry_run and self.extensions:
             modules = ", ".join(LIGHTOP_MODULES) if LIGHTOP_MODULES else "full"
             print(f"\n[LightOp] Build succeeded: {modules}")
@@ -551,11 +570,7 @@ class BuildReleaseExtension(BuildExtension):
         build_ext.build_extensions(self)
 
     def build_extension(self, ext):
-        # Isolate Ninja state and object files for each split extension.
-        # Keep the default full build's existing temporary-directory layout.
-        if not ENABLE_ANY_SPLIT:
-            super().build_extension(ext)
-            return
+        # Keep each extension's object cache independent of the build selection.
         orig_temp = self.build_temp
         self.build_temp = os.path.join(
             orig_temp, str(ext.name).replace('.', '__'))
@@ -636,13 +651,27 @@ def get_extensions():
         ('pybind', '*.cpp'),
     ]
 
+    module_sources = {}
+    for name in BUILD_MODULES:
+        sources = []
+        for pattern in MODULES[name]["sources"]:
+            matches = sorted(glob.glob(pattern))
+            if not matches:
+                raise ValueError(f"{name}: source pattern matched no files: {pattern}")
+            sources.extend(matches)
+        module_sources[name] = list(dict.fromkeys(sources))
+
     indexer_prep = "./csrc/kernels/mla/dsv41_indexer_prep.cu"
     op_files = []
     if BUILD_FULL:
         for _src_dir, _src_pat in _CSRC_DIRS:
             op_files += glob.glob(f'./csrc/{_src_dir}/{_src_pat}')
         # This source defines a standalone extension with stricter FP contraction.
-        op_files.remove(indexer_prep)
+        migrated = {str(Path(source).resolve())
+                    for sources in module_sources.values() for source in sources}
+        migrated.add(str(Path(indexer_prep).resolve()))
+        op_files = [source for source in op_files
+                    if str(Path(source).resolve()) not in migrated]
 
     extension = CUDAExtension
     # 迁移后只需要两个搜索根：csrc/ 与 csrc/include/。
@@ -654,11 +683,11 @@ def get_extensions():
     include_dirs.append(rocm_home+'/rocrand/include')
     
     if BUILD_FULL:
-        # Default full native extension.
+        # Remaining operators; migrated families are built separately below.
         ext_ops = extension(
-            name="lightop.op",
+            name="lightop._C",
             sources=op_files,
-            include_dirs=include_dirs,
+            include_dirs=list(include_dirs),
             libraries=['rocblas', 'hipblas', 'hipblaslt'],
             library_dirs=[os.path.join(rocm_home, 'lib')],
             define_macros=define_macros,
@@ -677,17 +706,9 @@ def get_extensions():
         ))
 
     # Each family supplies only its additions to the common build settings.
-    for name in LIGHTOP_MODULES:
+    for name in BUILD_MODULES:
         spec = MODULES[name]
-        sources = []
-        for source in spec["sources"]:
-            if glob.has_magic(source):
-                matches = glob.glob(source)
-                if not matches:
-                    raise ValueError(f"{name}: source pattern matched no files: {source}")
-                sources.extend(matches)
-            else:
-                sources.append(source)
+        sources = module_sources[name]
         module_compile_args = {k: list(v) for k, v in extra_compile_args.items()}
         for compiler, flags in spec["extra_compile_args"].items():
             module_compile_args.setdefault(compiler, []).extend(flags)

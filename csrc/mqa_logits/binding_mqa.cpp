@@ -1,27 +1,10 @@
 // Copyright (c) 2026 Hygon Information Technology Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Phase-1 pilot: split the "MQA logits" family bindings into a dedicated
-// extension module (lightop._ext.module_mqa_logits), mirroring AITER's "one
-// operator backend = one module_xxx.so" layout and following the Phase-0
-// RMSNorm module (csrc/kernels/rmsnorm/binding_rmsnorm.cpp).
-//
-// Scope (all definitions live inside the MQA family directories of this tree):
-//   csrc/mqa_logits/                  (incl. bf16/, int8/, fp8/)
-//   csrc/mqa_logits/fp8_fp4/
-//   csrc/mqa_logits/paged/
-//   csrc/mqa_logits/sparse/
-//   csrc/kernels/index_k_int8_dequant/
-//
-// The m.def / m.attr blocks below are copied verbatim from
-// csrc/pybind/export.cpp (main-module binding region, plus bind_paged_sparse_mqa
-// and bind_prefill_sparse_fusion). Symbols whose definitions live in root
-// csrc/kernels/dsv41_*.cu (dsv41_build_swa_token_ids,
-// dsv41_remap_indices_to_staging, dsv41_ragged_topk_postprocess,
-// dsv41_pair_partners) are intentionally NOT migrated: they belong to the
-// dsv4 prefill family and stay bound by the monolith.
-//
-// Build with LIGHTOP_MODULES=mqa_logits to compile this family independently.
+// Sole binding owner for the MQA logits family in full and selective builds.
+// Sources are declared in python/lightop/module_registry.json.
+// Helpers implemented outside this family (such as dsv41_pair_partners) remain
+// in lightop._C and are exposed through the same lightop.op facade.
 
 #include <torch/extension.h>
 
@@ -32,6 +15,7 @@
 // relative to this file's directory (csrc/mqa_logits/), matching the style of
 // export.cpp; the 1118 tree regrouped the family under mqa_logits/{fp8_fp4,
 // paged,sparse}/ and moved index_k_int8_dequant under csrc/kernels/.
+#include "mqa_logits_api.h"
 #include "fp8_fp4/fp8_fp4_mqa_logits.h"
 #include "fp8_fp4/dsv41_mqa_prep.h"
 #include "paged/paged_mqa_logits.h"
@@ -101,9 +85,7 @@ void bind_paged_sparse_mqa(pybind11::module_& m) {
         py::arg("paired_rows")=false,py::arg("threads")=0);
 }
 
-// Copied verbatim from csrc/pybind/export.cpp (bind_prefill_sparse_fusion).
-// The monolith calls this at export.cpp:1994; definitions live in
-// csrc/sparse_page_mqa/prefill_sparse_fusion.cu and prefill_sparse_sort.cu.
+// Definitions live in sparse/prefill_sparse_fusion.cu and sparse/prefill_sparse_sort.cu.
 void bind_prefill_sparse_fusion(pybind11::module_& m) {
 #ifdef PREFILL_FUSION_BUILD_ID
   m.attr("PREFILL_SPARSE_FUSION_BUILD_ID") = PREFILL_FUSION_BUILD_ID;
@@ -119,11 +101,29 @@ void bind_prefill_sparse_fusion(pybind11::module_& m) {
 }  // namespace
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.doc() = "LightOp MQA logits operators (Phase-1 module split pilot)";
+  m.doc() = "LightOp MQA logits operators";
   // Marker proving the aggregator (lightop/core.py) routed to this module.
   m.attr("LIGHTOP_MQA_MODULE") = 1;
 
-  // --- verbatim from csrc/pybind/export.cpp ---
+  m.def("mqa_logits_topk_sampled_int8", &lightop::mqa_int8::mqa_logits_topk_sampled_int8,
+      py::arg("q"),
+      py::arg("k"),
+      py::arg("weights"),
+      py::arg("kv_scale"),
+      py::arg("starts"),
+      py::arg("ends"),
+      py::arg("offsets"),
+      py::arg("sorted_values") = py::none(),
+      py::arg("next_thresholds") = py::none(),
+      py::arg("stats") = py::none(),
+      py::arg("parallel_histogram") = true,
+      py::arg("fallback_workspace_rows") = 0,
+      py::arg("reuse_full_window") = true,
+      py::arg("sort_topk") = true,
+      py::arg("min_sample_k") = 131072,
+      py::arg("direct_candidate_emit") = false);
+
+  // Public MQA bindings.
   m.def("mqa_logits", &at::native::mqa_logits, "mqa_logits",
       py::arg("Q"),
       py::arg("K"),
@@ -137,7 +137,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("KV_scale") = torch::nullopt, 
       py::arg("clean_logits") = true,
       py::arg("D_out") = torch::nullopt);
-  // --- verbatim from csrc/pybind/export.cpp ---
+
+  // Public MQA bindings.
   m.def("get_paged_mqa_logits_metadata", &lightop::deep_gemm::get_paged_mqa_logits_metadata,"get_paged_mqa_logits_metadata");
   m.def("dsv41_mqa_query_lens", &lightop::fp4_mqa::dsv41_mqa_query_lens,
         py::arg("extend_start_loc"), py::arg("extend_seq_lens"),
@@ -191,7 +192,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   // dsv41_remap_indices_to_staging, dsv41_ragged_topk_postprocess,
   // dsv41_pair_partners) are defined in root csrc/dsv41_*.cu /
   // dsv4_topk_workspace.cu and intentionally stay in the monolith.
-  // --- verbatim from csrc/pybind/export.cpp ---
+
+  // Public MQA bindings.
   m.def(
       "dequantize_index_k_int8_paged",
       &lightop::deep_gemm::dequantize_index_k_int8_paged,

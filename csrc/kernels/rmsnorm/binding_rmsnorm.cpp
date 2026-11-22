@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Public interfaces implemented by csrc/kernels/rmsnorm/*.cu.
-// Keep signatures, Python defaults and capability markers aligned with
-// csrc/pybind/export.cpp so full and modular builds expose the same API.
+// This is the sole binding owner in both full and selective builds.
+// Preserve the existing Python signatures, defaults and capability markers.
 #include <torch/extension.h>
 
 namespace at::native {

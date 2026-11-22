@@ -76,13 +76,25 @@ def select_modules(environ):
 
 
 class _SplitOps(ModuleType):
-    """Expose built family symbols through the existing lightop.op API."""
+    """Stable public facade with exactly one native owner per exported symbol."""
 
     def __init__(self, backends):
         super().__init__("lightop.op")
         self.__file__ = __file__
         self._deleted_exports = set()
-        self._backends = backends
+        self._owners = {}
+        for backend in backends:
+            for name in dir(backend):
+                if name.startswith("__"):
+                    continue
+                if name in self._owners:
+                    previous = self._owners[name].__name__
+                    raise ImportError(
+                        f"Duplicate LightOp native export {name!r}: "
+                        f"{previous} and {backend.__name__}. Rebuild the extensions."
+                    )
+                self._owners[name] = backend
+        self.__all__ = sorted(name for name in self._owners if not name.startswith("_"))
 
     def __setattr__(self, name, value):
         super().__setattr__(name, value)
@@ -99,38 +111,32 @@ class _SplitOps(ModuleType):
     def __getattr__(self, name):
         if name in self._deleted_exports:
             raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
-        for backend in self._backends:
-            try:
-                value = getattr(backend, name)
-            except AttributeError:
-                continue
-            setattr(self, name, value)
-            return value
-        raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
+        backend = self._owners.get(name)
+        if backend is None:
+            raise AttributeError(
+                f"module {self.__name__!r} has no attribute {name!r}; "
+                "the required native module may not have been built"
+            )
+        value = getattr(backend, name)
+        setattr(self, name, value)
+        return value
 
     def __dir__(self):
-        names = set(super().__dir__())
-        for backend in self._backends:
-            names.update(dir(backend))
-        return sorted(names - self._deleted_exports)
+        return sorted((set(super().__dir__()) | set(self._owners)) - self._deleted_exports)
 
 
 def load_ops():
-    """Load the full extension, or expose split extensions when it is absent.
+    """Combine registered family extensions and the optional remaining operators.
 
-    Register the split facade under lightop.op so existing relative imports and
-    import lightop.op continue to resolve to the same module object. Real native
-    loading errors are propagated; only an absent target module is optional.
+    Legacy op.so is never loaded: lightop.op always names the Python facade.
+    Only an absent target extension is optional; dependency/ABI errors propagate.
     """
-    try:
-        return importlib.import_module("lightop.op")
-    except ModuleNotFoundError as exc:
-        if exc.name != "lightop.op":
-            raise
-
+    existing = sys.modules.get("lightop.op")
+    if isinstance(existing, _SplitOps):
+        return existing
     backends = []
-    for spec in MODULES.values():
-        name = spec["extension"]
+    names = [spec["extension"] for spec in MODULES.values()] + ["lightop._C"]
+    for name in names:
         try:
             backends.append(importlib.import_module(name))
         except ModuleNotFoundError as exc:
@@ -139,7 +145,7 @@ def load_ops():
     if not backends:
         raise ImportError(
             "No LightOp native extension found. Build the full package or select "
-            "modules with LIGHTOP_MODULES=rmsnorm,mqa_logits."
+            "modules with LIGHTOP_MODULES=" + ",".join(MODULES) + "."
         )
     op = _SplitOps(backends)
     sys.modules["lightop.op"] = op

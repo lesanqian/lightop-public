@@ -18,19 +18,6 @@ from ..rmsnorm import (
     fused_rms_norm_rope_contiguous,
 )
 
-fuse_layernorm_rotary_embedding = (
-    lightop_native.fuse_layernorm_rotary_embedding
-)
-fused_deepseek_v4_qnorm_rope_kvnorm_rope = (
-    lightop_native.fused_deepseek_v4_qnorm_rope_kvnorm_rope
-)
-fused_deepseek_v4_qnorm_rope_kvnorm_rope_quant_insert_int32 = (
-    lightop_native.fused_deepseek_v4_qnorm_rope_kvnorm_rope_quant_insert_int32
-)
-
-gemma_qkv_split_rms_rotary_embedding_fuse = (
-    lightop_native.gemma_qkv_split_rms_rotary_embedding_fuse
-)
 
 __all__ = [
     "fuse_layernorm_rotary_embedding",
@@ -52,3 +39,23 @@ for _name in ('spark_mla_rope_cat_store', 'indexer_q_rope_hadamard_quant', 'mla_
     if hasattr(lightop_native, _name):
         globals()[_name] = getattr(lightop_native, _name)
         __all__.append(_name)
+
+
+_NATIVE_EXPORTS = (
+    "fuse_layernorm_rotary_embedding",
+    "fused_deepseek_v4_qnorm_rope_kvnorm_rope",
+    "fused_deepseek_v4_qnorm_rope_kvnorm_rope_quant_insert_int32",
+    "gemma_qkv_split_rms_rotary_embedding_fuse",
+)
+
+
+def __getattr__(name):
+    if name not in _NATIVE_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(lightop_native, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))

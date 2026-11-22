@@ -24,7 +24,6 @@ from ..fuse_rotary_positional_embedding import (
 ROTARY_EMBEDDING_BF16_ROUNDED_OUT_ABI = getattr(
     lightop_native, "ROTARY_EMBEDDING_BF16_ROUNDED_OUT_ABI", 0
 )
-rotary_embedding_deepseek_fuse = lightop_native.rotary_embedding_deepseek_fuse
 
 __all__ = [
     "RotaryEmbedding",
@@ -33,3 +32,17 @@ __all__ = [
     "rotary_embedding_deepseek_fuse",
     "rotary_embedding_fuse",
 ]
+
+
+_NATIVE_EXPORTS = ('rotary_embedding_deepseek_fuse',)
+
+def __getattr__(name):
+    if name not in _NATIVE_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(lightop_native, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
