@@ -8,10 +8,7 @@ import torch
 import torch.nn.functional as F
 
 from lightop import fuse_silu_mul_clamp_quant_ep
-
-
-lmslim_int8_utils = pytest.importorskip("lmslim.layers.gemm.int8_utils")
-per_token_quant_int8 = lmslim_int8_utils.per_token_quant_int8
+from lightop._lmslim_native.layers.gemm.int8_utils import per_token_quant_int8
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires a GPU")
