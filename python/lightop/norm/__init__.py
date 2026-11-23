@@ -20,7 +20,6 @@ from .existing import (
     RMSNormTorch,
     fuse_fill_rms_x2_concat,
     fused_add_rms_norm,
-    fused_add_rms_norm_opt,
     fused_add_layer_norm,
     fused_rms_norm_contiguous,
     gemma_fused_add_rmsnorm,
@@ -30,13 +29,10 @@ from .existing import (
     rms_norm_dynamic_per_token_quant_sglang,
     mla_qkv_a_rms_norm_dynamic_per_token_quant_sglang,
     rms_norm,
-    rms_norm_no_weight,
     rms_norm_per_token_fp8_quant,
     rms_norm_per_token_quant,
-    rms_norm_opt,
     rmsnorm_backward,
     rmsnorm_forward,
-    rmsnorm_forward_autograd,
 )
 
 # Resolve optional groups only when requested, as in lightop.attention.
@@ -44,6 +40,10 @@ _LAZY_EXPORTS = {
     name: module
     for module, names in {
         ".existing": (
+            "rms_norm_opt",
+            "fused_add_rms_norm_opt",
+            "rms_norm_no_weight",
+            "rmsnorm_forward_autograd",
             "layer_norm_opt",
             "fused_add_layer_norm_opt",
             "layer_norm_fwd_1pass_opt",

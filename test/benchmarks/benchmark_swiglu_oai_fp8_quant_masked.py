@@ -120,7 +120,8 @@ def main():
     if not torch.cuda.is_available():
         parser.error("requires a GPU")
     torch.manual_seed(args.seed)
-    native_path = Path(op.__file__)
+    from lightop.core import owner_binary
+    native_path = Path(owner_binary("swiglu_oai_fp8_quant_masked"))
     result = {
         "torch": torch.__version__, "hip": torch.version.hip,
         "device": str(torch.cuda.get_device_properties(torch.cuda.current_device())),

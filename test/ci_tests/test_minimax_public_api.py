@@ -68,3 +68,19 @@ def test_native_facade_delete_and_restore(cached):
     assert "operator" in dir(facade)
     del facade.operator
     assert not hasattr(facade, "operator")
+
+
+def test_native_facade_mock_patch_preserves_original():
+    from unittest import mock
+    from lightop.core import _SplitOps
+
+    backend = ModuleType("native_for_patch_test")
+    original = object()
+    replacement = object()
+    backend.operator = original
+    facade = _SplitOps([backend])
+
+    assert "operator" in vars(facade)
+    with mock.patch.object(facade, "operator", replacement):
+        assert facade.operator is replacement
+    assert facade.operator is original

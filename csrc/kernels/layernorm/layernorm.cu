@@ -4,15 +4,6 @@
 #include "layernorm.h"
 #include <c10/util/MaybeOwned.h>
 #include <iostream> //lj
-int get_layernorm_blocksize(int cols)
-{
-  int blocksize;
-  if(cols>256)blocksize=512;
-  else if(cols>128)blocksize=256;
-  else if(cols>64)blocksize=128;
-  else blocksize=64;
-  return blocksize;
-}
 
 namespace at{
 namespace native{

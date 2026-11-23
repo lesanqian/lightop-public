@@ -3,6 +3,8 @@
 
 """KV-cache and sequence-metadata APIs."""
 
+from importlib import import_module
+
 from ..minimax_cp_cache_scatter import minimax_cp_cache_scatter
 
 from ..fused_metadata import fused_metadata_kernel_general, fused_dsa_cp_prefill_metadata, dsa_cp_prefill_metadata_plan
@@ -19,13 +21,26 @@ from .topk_workspace import (
     dsv4_pack_c4_topk_workspace,
     dsv4_pack_sparse_topk_workspace,
 )
-from .native import (
-    fuse_act_quant_and_store_index_k_cache,
-    fuse_qk_quant_and_store_index_k_cache,
-    fused_quantize_and_store_mla_kv_cache,
-    quantize_nope_fp8_rope_bf16_pack_store,
-    fused_concat_and_store_mla_kv_cache,
+
+_LAZY_NATIVE_EXPORTS = (
+    "fuse_act_quant_and_store_index_k_cache",
+    "fuse_qk_quant_and_store_index_k_cache",
+    "fused_quantize_and_store_mla_kv_cache",
+    "quantize_nope_fp8_rope_bf16_pack_store",
+    "fused_concat_and_store_mla_kv_cache",
 )
+
+
+def __getattr__(name):
+    if name in _LAZY_NATIVE_EXPORTS:
+        value = getattr(import_module(".native", __name__), name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
 
 __all__ = [
     "minimax_cp_cache_scatter",

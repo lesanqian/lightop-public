@@ -537,11 +537,12 @@ def main():
         torch.cuda.synchronize()
         return
     args.output.mkdir(parents=True, exist_ok=True)
+    from lightop.core import owner_binary
     result = {
         "torch": torch.__version__,
         "hip": torch.version.hip,
         "lightop": lightop.__file__,
-        "extension": lightop.op.__file__,
+        "extension": owner_binary("hc_mix_stats"),
         "device": str(torch.cuda.get_device_properties(0)),
         "HIP_VISIBLE_DEVICES": os.environ.get("HIP_VISIBLE_DEVICES"),
     }

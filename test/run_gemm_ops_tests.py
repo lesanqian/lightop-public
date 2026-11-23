@@ -59,9 +59,12 @@ def find_build_dir(explicit: Path | None) -> Path:
             raise SystemExit("no build/lib.* directory found; rerun with --build")
 
     build_dir = candidates[-1].resolve()
-    if not list((build_dir / "lightop").glob("op*.so")):
+    native_sos = list((build_dir / "lightop").glob("_C*.so")) + list(
+        (build_dir / "lightop" / "_ext").rglob("*.so")
+    )
+    if not native_sos:
         raise SystemExit(
-            f"compiled lightop/op*.so is missing from {build_dir}; rerun with --build"
+            f"compiled LightOp native extensions (_C*.so / _ext/*.so) are missing from {build_dir}; rerun with --build"
         )
     return build_dir
 

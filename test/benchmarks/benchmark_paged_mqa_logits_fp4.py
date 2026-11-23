@@ -146,7 +146,8 @@ def benchmark(args):
         assert git_hash and args.expect_commit.startswith(git_hash), (args.expect_commit, git_hash)
     pci = ctypes.create_string_buffer(32)
     assert ctypes.CDLL("libamdhip64.so").hipDeviceGetPCIBusId(pci, 32, 0) == 0
-    extension = next(Path(lightop.__file__).parent.glob("op*.so"))
+    from lightop.core import owner_binary
+    extension = Path(owner_binary("paged_mqa_logits_fp4"))
     identity = dict(pci=pci.value.decode(), arch=props.gcnArchName,
                     compute_units=props.multi_processor_count,
                     torch=torch.__version__, hip=torch.version.hip,

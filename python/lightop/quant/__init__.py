@@ -3,6 +3,8 @@
 
 """Public quantization, dequantization, and format-conversion APIs."""
 
+from importlib import import_module
+
 from ..minimax_cp_fp8_pack import minimax_cp_fp8_pack
 from .affine import w4tow16
 from .blockwise import blockwise_scaled_cast_transpose
@@ -10,8 +12,19 @@ from .fp8 import (
     fp8_to_16,
     per_token_group_quant_fp8,
     per_token_quant_fp8,
-    quantize_nope_fp8_rope_bf16_pack,
 )
+
+
+def __getattr__(name):
+    if name == "quantize_nope_fp8_rope_bf16_pack":
+        value = getattr(import_module(".fp8", __name__), name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
 from .int8 import (
     destindex_copy_quantize_int8_cuda,
     destindex_dequantize_int8_cuda,

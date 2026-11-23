@@ -225,4 +225,12 @@ void Gamma_Backward(int length,int N,scalar_t* dY_data,scalar_t* X_data,float* r
   __syncthreads();
 
 
-int get_layernorm_blocksize(int cols);
+inline int get_layernorm_blocksize(int cols)
+{
+  int blocksize;
+  if(cols>256)blocksize=512;
+  else if(cols>128)blocksize=256;
+  else if(cols>64)blocksize=128;
+  else blocksize=64;
+  return blocksize;
+}
