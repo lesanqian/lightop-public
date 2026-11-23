@@ -23,5 +23,65 @@
             "./csrc/mqa_logits/sparse/*.cu",
             "./csrc/kernels/index_k_int8_dequant/*.cu"
         ]
+    },
+    "marlin_w4a16": {
+        "extension": "lightop._ext.module_marlin_w4a16",
+        "arch_profile": "marlin_w4a16",
+        "bindings": [
+            "./csrc/moe_marlin_gemm/w4a16/binding_marlin_w4a16.cpp"
+        ],
+        "sources": [
+            "./csrc/moe_marlin_gemm/w4a16/*.cu"
+        ]
+    },
+    "marlin_w4a8": {
+        "extension": "lightop._ext.module_marlin_w4a8",
+        "arch_profile": "marlin_w4a8",
+        "bindings": [
+            "./csrc/moe_marlin_gemm/w4a8/binding_marlin_w4a8.cpp"
+        ],
+        "sources": [
+            "./csrc/moe_marlin_gemm/w4a8/*.cu"
+        ]
+    },
+    "marlin_w4fp8": {
+        "extension": "lightop._ext.module_marlin_w4fp8",
+        "arch_profile": "marlin_w4a8",
+        "bindings": [
+            "./csrc/moe_marlin_gemm/w4fp8/binding_marlin_w4fp8.cpp"
+        ],
+        "sources": [
+            "./csrc/moe_marlin_gemm/w4fp8/*.cu"
+        ],
+        "include_dirs": [
+            "./csrc/moe_marlin_gemm/w4a8"
+        ]
+    },
+    "norm": {
+        "extension": "lightop._ext.module_norm",
+        "bindings": [
+            "./csrc/kernels/layernorm/binding_norm.cpp"
+        ],
+        "sources": [
+            "./csrc/kernels/layernorm/*.cu",
+            "./csrc/kernels/groupnorm/*.cu"
+        ]
+    },
+    "moe": {
+        "extension": "lightop._ext.module_moe",
+        "bindings": [
+            "./csrc/moe_gemm/w8a8/binding_moe.cpp"
+        ],
+        "sources": [
+            "./csrc/moe_gemm/w16a16/*.cu",
+            "./csrc/moe_gemm/w4a8/*.cu",
+            "./csrc/moe_gemm/w8a8/*.cu",
+            "./csrc/kernels/moe_gate/*.cu",
+            "./csrc/kernels/moe_align_sum_kernels.cu",
+            "./csrc/kernels/moe_swiglu_dynamic_quant.cu",
+            "./csrc/kernels/groupgemm_permute_unpermute.cu",
+            "./csrc/kernels/deepgemm_moe_permute.cu",
+            "./csrc/kernels/fused_deepep_prepare.cu"
+        ]
     }
 }

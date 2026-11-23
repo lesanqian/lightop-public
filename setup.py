@@ -395,161 +395,53 @@ class BuildReleaseExtension(BuildExtension):
                 if('-Wall' in extra_cc_cflags):
                     extra_cc_cflags.remove('-Wall')
                 print("release mode")
-            
-            marlin_w4a16_dir = os.path.abspath('./csrc/moe_marlin_gemm/w4a16/')
-            marlin_w4a8_dir = os.path.abspath('./csrc/moe_marlin_gemm/w4a8/')
-            marlin_w4fp8_dir = os.path.abspath('./csrc/moe_marlin_gemm/w4fp8/')  # 如果也需要特殊处理
 
-            marlin_w4a16_sources = []
-            marlin_w4a8_sources = []
-            marlin_w4fp8_sources = []
-            other_sources = []
+            arch_profile = getattr(self, '_current_arch_profile', 'default')
+            arch_flags_fn = {
+                'default': _get_rocm_arch_flags,
+                'marlin_w4a16': _get_rocm_arch_flags_marlin_w4a16,
+                'marlin_w4a8': _get_rocm_arch_flags_marlin_w4a8,
+            }.get(arch_profile)
+            if arch_flags_fn is None:
+                raise ValueError(f"Unknown arch_profile: {arch_profile!r}")
 
-            for s in sources:
-                abs_path = os.path.abspath(s)
-                if abs_path.startswith(marlin_w4a16_dir):
-                    marlin_w4a16_sources.append(s)
-                elif abs_path.startswith(marlin_w4a8_dir):
-                    marlin_w4a8_sources.append(s)
-                elif abs_path.startswith(marlin_w4fp8_dir):
-                    marlin_w4fp8_sources.append(s)
-                else:
-                    other_sources.append(s)
-            
-            marlin_w4a16_objects = [obj for src, obj in zip(sources, objects) if src in marlin_w4a16_sources]
-            marlin_w4a8_objects = [obj for src, obj in zip(sources, objects) if src in marlin_w4a8_sources]
-            marlin_w4fp8_objects = [obj for src, obj in zip(sources, objects) if src in marlin_w4fp8_sources]
-            other_objects = [obj for src, obj in zip(sources, objects) if src in other_sources]
-            
             with_cuda = any(map(_is_cuda_file, sources))
-            
-            # compile other
-            if other_sources:
+
+            if isinstance(extra_postargs, dict):
+                post_cflags = list(extra_postargs['cxx'])
+            else:
+                post_cflags = list(extra_postargs)
+            if IS_HIP_EXTENSION:
+                post_cflags = COMMON_HIP_FLAGS + post_cflags
+            append_cxx_std_if_no_std_present(post_cflags)
+
+            cuda_cflags = None
+            cuda_post_cflags = None
+            if with_cuda:
                 if isinstance(extra_postargs, dict):
-                    post_cflags = extra_postargs['cxx']
+                    cuda_post_cflags = list(extra_postargs['nvcc'])
                 else:
-                    post_cflags = list(extra_postargs)
+                    cuda_post_cflags = list(extra_postargs)
                 if IS_HIP_EXTENSION:
-                    post_cflags = COMMON_HIP_FLAGS + post_cflags
-                append_cxx_std_if_no_std_present(post_cflags)
-                
-                cuda_post_cflags = None
-                if with_cuda:
-                    if isinstance(extra_postargs, dict):
-                        cuda_post_cflags = extra_postargs['nvcc']
-                    else:
-                        cuda_post_cflags = list(extra_postargs)
-                    if IS_HIP_EXTENSION:
-                        cuda_post_cflags = cuda_post_cflags + _get_rocm_arch_flags(cuda_post_cflags)
-                        cuda_post_cflags = COMMON_HIP_FLAGS + COMMON_HIPCC_FLAGS + cuda_post_cflags
-                    append_cxx_std_if_no_std_present(cuda_post_cflags)
-                    cuda_cflags = [shlex.quote(f) for f in common_cflags]
-                    cuda_post_cflags = [shlex.quote(f) for f in cuda_post_cflags]
-                
-                _write_ninja_file_and_compile_objects(
-                    sources=other_sources, 
-                    objects=other_objects,
-                    cflags=[shlex.quote(f) for f in extra_cc_cflags + common_cflags],
-                    post_cflags=[shlex.quote(f) for f in post_cflags],
-                    cuda_cflags=cuda_cflags if with_cuda else None,
-                    cuda_post_cflags=cuda_post_cflags if with_cuda else None,
-                    build_directory=output_dir,
-                    verbose=True,
-                    with_cuda=with_cuda
-                )
-            
-            # compile w4a16
-            if marlin_w4a16_sources:
-                marlin_cxx_flags = ['-O3', '-w']
-                marlin_nvcc_flags = ['-O3', '-w']
-                if IS_HIP_EXTENSION:
-                    marlin_cxx_flags = COMMON_HIP_FLAGS + marlin_cxx_flags
-                append_cxx_std_if_no_std_present(marlin_cxx_flags)
+                    cuda_post_cflags = cuda_post_cflags + arch_flags_fn(cuda_post_cflags)
+                    cuda_post_cflags = COMMON_HIP_FLAGS + COMMON_HIPCC_FLAGS + cuda_post_cflags
+                append_cxx_std_if_no_std_present(cuda_post_cflags)
+                cuda_cflags = [shlex.quote(f) for f in common_cflags]
+                cuda_post_cflags = [shlex.quote(f) for f in cuda_post_cflags]
 
-                marlin_cuda_cflags = None
-                marlin_cuda_post_cflags = None
-                if with_cuda:
-                    marlin_cuda_cflags = [shlex.quote(f) for f in common_cflags]
-                    marlin_cuda_post_cflags = list(marlin_nvcc_flags)
-                    if IS_HIP_EXTENSION:
-                        marlin_cuda_post_cflags += _get_rocm_arch_flags_marlin_w4a16(marlin_cuda_post_cflags)
-                        marlin_cuda_post_cflags = COMMON_HIP_FLAGS + COMMON_HIPCC_FLAGS + marlin_cuda_post_cflags
-                    append_cxx_std_if_no_std_present(marlin_cuda_post_cflags)
-                    marlin_cuda_post_cflags = [shlex.quote(f) for f in marlin_cuda_post_cflags]
+            _write_ninja_file_and_compile_objects(
+                sources=sources,
+                objects=objects,
+                cflags=[shlex.quote(f) for f in extra_cc_cflags + common_cflags],
+                post_cflags=[shlex.quote(f) for f in post_cflags],
+                cuda_cflags=cuda_cflags,
+                cuda_post_cflags=cuda_post_cflags,
+                build_directory=output_dir,
+                verbose=True,
+                with_cuda=with_cuda
+            )
 
-                _write_ninja_file_and_compile_objects(
-                    sources=marlin_w4a16_sources,
-                    objects=marlin_w4a16_objects,
-                    cflags=[shlex.quote(f) for f in extra_cc_cflags + common_cflags],
-                    post_cflags=[shlex.quote(f) for f in marlin_cxx_flags],
-                    cuda_cflags=marlin_cuda_cflags,
-                    cuda_post_cflags=marlin_cuda_post_cflags,
-                    build_directory=output_dir,
-                    verbose=True,
-                    with_cuda=with_cuda
-                )
-            # compile w4a8
-            if marlin_w4a8_sources:
-                marlin_cxx_flags = ['-O3', '-w']
-                marlin_nvcc_flags = ['-O3', '-w']
-                if IS_HIP_EXTENSION:
-                    marlin_cxx_flags = COMMON_HIP_FLAGS + marlin_cxx_flags
-                append_cxx_std_if_no_std_present(marlin_cxx_flags)
-
-                marlin_cuda_cflags = None
-                marlin_cuda_post_cflags = None
-                if with_cuda:
-                    marlin_cuda_cflags = [shlex.quote(f) for f in common_cflags]
-                    marlin_cuda_post_cflags = list(marlin_nvcc_flags)
-                    if IS_HIP_EXTENSION:
-                        marlin_cuda_post_cflags += _get_rocm_arch_flags_marlin_w4a8(marlin_cuda_post_cflags)
-                        marlin_cuda_post_cflags = COMMON_HIP_FLAGS + COMMON_HIPCC_FLAGS + marlin_cuda_post_cflags
-                    append_cxx_std_if_no_std_present(marlin_cuda_post_cflags)
-                    marlin_cuda_post_cflags = [shlex.quote(f) for f in marlin_cuda_post_cflags]
-
-                _write_ninja_file_and_compile_objects(
-                    sources=marlin_w4a8_sources,
-                    objects=marlin_w4a8_objects,
-                    cflags=[shlex.quote(f) for f in extra_cc_cflags + common_cflags],
-                    post_cflags=[shlex.quote(f) for f in marlin_cxx_flags],
-                    cuda_cflags=marlin_cuda_cflags,
-                    cuda_post_cflags=marlin_cuda_post_cflags,
-                    build_directory=output_dir,
-                    verbose=True,
-                    with_cuda=with_cuda
-                )
-            # compile w4fp8
-            if marlin_w4fp8_sources:
-                marlin_cxx_flags = ['-O3', '-w']
-                marlin_nvcc_flags = ['-O3', '-w']
-                if IS_HIP_EXTENSION:
-                    marlin_cxx_flags = COMMON_HIP_FLAGS + marlin_cxx_flags
-                append_cxx_std_if_no_std_present(marlin_cxx_flags)
-
-                marlin_cuda_cflags = None
-                marlin_cuda_post_cflags = None
-                if with_cuda:
-                    marlin_cuda_cflags = [shlex.quote(f) for f in common_cflags]
-                    marlin_cuda_post_cflags = list(marlin_nvcc_flags)
-                    if IS_HIP_EXTENSION:
-                        marlin_cuda_post_cflags += _get_rocm_arch_flags_marlin_w4a8(marlin_cuda_post_cflags)
-                        marlin_cuda_post_cflags = COMMON_HIP_FLAGS + COMMON_HIPCC_FLAGS + marlin_cuda_post_cflags
-                    append_cxx_std_if_no_std_present(marlin_cuda_post_cflags)
-                    marlin_cuda_post_cflags = [shlex.quote(f) for f in marlin_cuda_post_cflags]
-
-                _write_ninja_file_and_compile_objects(
-                    sources=marlin_w4fp8_sources,
-                    objects=marlin_w4fp8_objects,
-                    cflags=[shlex.quote(f) for f in extra_cc_cflags + common_cflags],
-                    post_cflags=[shlex.quote(f) for f in marlin_cxx_flags],
-                    cuda_cflags=marlin_cuda_cflags,
-                    cuda_post_cflags=marlin_cuda_post_cflags,
-                    build_directory=output_dir,
-                    verbose=True,
-                    with_cuda=with_cuda
-                )
-            
-            return other_objects + marlin_w4a16_objects + marlin_w4a8_objects + marlin_w4fp8_objects
+            return objects
 
         self.compiler.compile = unix_wrap_ninja_compile
         build_ext.build_extensions(self)
@@ -558,11 +450,14 @@ class BuildReleaseExtension(BuildExtension):
         # Always isolate Ninja state and object files per extension, since full builds
         # compile both remaining lightop.op and split family extensions.
         orig_temp = self.build_temp
+        orig_profile = getattr(self, '_current_arch_profile', 'default')
         self.build_temp = os.path.join(
             orig_temp, str(ext.name).replace('.', '__'))
+        self._current_arch_profile = getattr(ext, '_arch_profile', 'default')
         try:
             super().build_extension(ext)
         finally:
+            self._current_arch_profile = orig_profile
             self.build_temp = orig_temp
 
 
@@ -703,13 +598,18 @@ def get_extensions():
             extra_compile_args={"cxx": ["-O3"], "nvcc": ["-O3", "-ffp-contract=off"]},
         ))
 
-    # Each family supplies only its additions to the common build settings.
+    # Each family supplies only its additions to the common build settings,
+    # except marlin arch profiles which use dedicated minimal flags.
     for name in SELECTED_SPLIT_MODULES:
         spec = MODULES[name]
-        module_compile_args = {k: list(v) for k, v in extra_compile_args.items()}
+        arch_profile = spec["arch_profile"]
+        if arch_profile in ("marlin_w4a16", "marlin_w4a8"):
+            module_compile_args = {"cxx": ["-O3", "-w"], "nvcc": ["-O3", "-w"]}
+        else:
+            module_compile_args = {k: list(v) for k, v in extra_compile_args.items()}
         for compiler, flags in spec["extra_compile_args"].items():
             module_compile_args.setdefault(compiler, []).extend(flags)
-        extensions.append(extension(
+        mod_ext = extension(
             name=spec["extension"],
             sources=resolved_split_sources[name],
             include_dirs=list(include_dirs) + [
@@ -719,7 +619,9 @@ def get_extensions():
             library_dirs=[os.path.join(rocm_home, 'lib')],
             define_macros=define_macros,
             extra_compile_args=module_compile_args,
-        ))
+        )
+        mod_ext._arch_profile = arch_profile
+        extensions.append(mod_ext)
 
     return extensions
 
