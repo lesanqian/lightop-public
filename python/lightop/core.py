@@ -29,7 +29,7 @@ def load_registry(path=None):
     if not isinstance(modules, dict) or not modules:
         raise ValueError("Module registry must be a non-empty object")
     required = {"extension", "sources"}
-    allowed = required | {"include_dirs", "extra_compile_args"}
+    allowed = required | {"include_dirs", "extra_compile_args", "headers"}
     extensions = set()
     for name, spec in modules.items():
         if not name.isidentifier() or not isinstance(spec, dict):
@@ -45,7 +45,9 @@ def load_registry(path=None):
         extensions.add(extension)
         spec.setdefault("include_dirs", [])
         spec.setdefault("extra_compile_args", {})
-        for field in ("sources", "include_dirs"):
+        # Optional header globs watched by the incremental-build fingerprint.
+        spec.setdefault("headers", [])
+        for field in ("sources", "include_dirs", "headers"):
             values = spec[field]
             if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):
                 raise ValueError(f"{name}.{field}: expected a list of non-empty strings")

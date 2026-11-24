@@ -4,6 +4,10 @@
         "sources": [
             "./csrc/kernels/rmsnorm/*.cu",
             "./csrc/kernels/rmsnorm/binding_rmsnorm.cpp"
+        ],
+        "headers": [
+            "./csrc/kernels/rmsnorm/*.h",
+            "./csrc/kernels/rmsnorm/*.cuh"
         ]
     },
     "mqa_logits": {
@@ -18,6 +22,12 @@
             "./csrc/mqa_logits/sparse/*.cu",
             "./csrc/kernels/index_k_int8_dequant/*.cu",
             "./csrc/mqa_logits/binding_mqa.cpp"
+        ],
+        "headers": [
+            "./csrc/mqa_logits/**/*.h",
+            "./csrc/mqa_logits/**/*.hpp",
+            "./csrc/mqa_logits/**/*.cuh",
+            "./csrc/kernels/index_k_int8_dequant/*.h"
         ]
     }
 }

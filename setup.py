@@ -4,6 +4,7 @@
 import torch
 from typing import List, Optional, Union
 import glob
+import importlib.util
 import runpy
 from pathlib import Path
 import os
@@ -36,6 +37,21 @@ except ValueError as exc:
     raise SystemExit(str(exc)) from None
 BUILD_FULL = not LIGHTOP_MODULES
 BUILD_MODULES = LIGHTOP_MODULES or tuple(MODULES)
+
+REPO_ROOT = Path(__file__).resolve().parent
+
+
+def _load_build_fingerprint():
+    """Load build_fingerprint.py by path so it works from any CWD/sys.path."""
+    path = REPO_ROOT / "build_fingerprint.py"
+    spec = importlib.util.spec_from_file_location("lightop_build_fingerprint", str(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# Incremental-build helpers (content-hash module fingerprints, layer 1 of §8).
+_build_fp = _load_build_fingerprint()
 
 
 def _find_rocm_home() -> Optional[str]:
@@ -199,7 +215,14 @@ def _write_ninja_file(path, cflags, post_cflags, cuda_cflags, cuda_post_cflags, 
         nvcc_gendeps = ''
         required_cuda_version = version.parse('10.2')
         has_cuda_version = torch.version.cuda is not None
-        if has_cuda_version and version.parse(torch.version.cuda) >= required_cuda_version:
+        # HIP/DTK leaves torch.version.cuda as None, so the stock guard would
+        # disable header dependency tracking entirely and a .cuh/.h edit would
+        # never invalidate a stale .o (analysis §2.3). hipcc is clang based and
+        # supports -MMD -MF, so enable depfile tracking for HIP as well.
+        headerdeps_supported = IS_HIP_EXTENSION or (
+            has_cuda_version and version.parse(torch.version.cuda) >= required_cuda_version)
+        if headerdeps_supported:
+            nvcc_gendeps = '-MMD -MF $out.d'
             cuda_compile_rule.append('  depfile = $out.d')
             cuda_compile_rule.append('  deps = gcc')
         cuda_compile_rule.append(
@@ -307,7 +330,13 @@ class BuildReleaseExtension(BuildExtension):
 
     def run(self):
         super().run()
-        if not self.dry_run:
+        # Only a full build owns the whole build_lib tree. A selective build
+        # (LIGHTOP_MODULES set) builds a subset of the extensions, so its
+        # "expected" set must never be used to delete the other families'
+        # artifacts - that would wipe _C/mqa_logits/... from build_lib every time
+        # a single module is rebuilt in-place. Skip pruning entirely when
+        # selective; a full build already sees every extension as expected.
+        if not self.dry_run and not LIGHTOP_MODULES:
             # Only this build's extensions belong in a wheel. In-place source
             # extensions are kept so rebuilding one family preserves the others.
             expected = {Path(self.build_lib, self.get_ext_filename(ext.name)).resolve()
@@ -569,15 +598,180 @@ class BuildReleaseExtension(BuildExtension):
         self.compiler.compile = unix_wrap_ninja_compile
         build_ext.build_extensions(self)
 
+    def finalize_options(self):
+        # torch's BuildExtension.finalize_options() forces self.force = True when
+        # Ninja is enabled, which would defeat the per-module fingerprint skip.
+        # Capture the user's real force intent *before* delegating (analysis §8.4).
+        self._lightop_user_force = bool(getattr(self, "force", False))
+        super().finalize_options()
+
+    # ----- layer 1: content-hash fingerprint skip -------------------------
+    def _lightop_build_signature(self, ext):
+        """Everything except file contents that must invalidate a module build."""
+        extra = ext.extra_compile_args
+        if isinstance(extra, dict):
+            cxx_flags = list(extra.get("cxx", []))
+            nvcc_flags = list(extra.get("nvcc", []))
+        else:
+            cxx_flags = list(extra)
+            nvcc_flags = []
+        return {
+            "torch": str(torch.__version__),
+            "torch_cuda": str(torch.version.cuda),
+            "torch_hip": str(torch.version.hip),
+            "dtk": str(dtk_version),
+            "rocm_home": str(ROCM_HOME),
+            "rocm_version": str(ROCM_VERSION),
+            "is_hip": bool(IS_HIP_EXTENSION),
+            "arch_env": os.environ.get("PYTORCH_ROCM_ARCH", ""),
+            "cxx": cxx_flags,
+            "nvcc": nvcc_flags,
+            "include_dirs": [os.path.abspath(path) for path in (ext.include_dirs or [])],
+            "libraries": list(ext.libraries or []),
+            "extra_objects": list(getattr(ext, "extra_objects", []) or []),
+            "define_macros": sorted((str(macro[0]), str(macro[1]) if len(macro) > 1 else None)
+                                    for macro in (ext.define_macros or [])),
+        }
+
+    def _lightop_watch_files(self, ext, module_build_dir, declared_headers):
+        """Repository-local files whose contents determine a module rebuild.
+
+        Sources always count. Headers come from (a) the exact dependency set the
+        previous hipcc ``-MMD`` run recorded - which Ninja keeps in its binary
+        ``.ninja_deps`` database and *not* in ``*.o.d`` files - (b) any
+        registry-declared header globs (a safety net before the first build),
+        and (c) every shared header under ``csrc/include`` because hipify may
+        rename those (``cuda_meta.h`` -> ``hip_meta.h``, ``reduce.h`` ->
+        ``reduce_hip.h``) so the recorded dependency alone can miss the original
+        file a developer actually edits.
+        """
+        repo_root = str(REPO_ROOT)
+        files = set()
+
+        def _absolute(path):
+            return path if os.path.isabs(path) else os.path.join(repo_root, path)
+
+        for source in ext.sources or []:
+            files.add(os.path.realpath(_absolute(source)))
+        for pattern in declared_headers or []:
+            for match in glob.glob(_absolute(pattern), recursive=True):
+                files.add(os.path.realpath(match))
+        # ``*.o.d`` files are usually consumed and deleted by Ninja, so this only
+        # helps on toolchains that leave them behind; the ``.ninja_deps`` dump is
+        # the authoritative dependency source.
+        files.update(_build_fp.collect_dependency_files([module_build_dir], repo_root))
+        files.update(_build_fp.collect_ninja_deps(module_build_dir, repo_root))
+        # Shared headers under csrc/include are only relevant to the modules
+        # whose objects actually depend on them. Gate them by the dependency
+        # names Ninja recorded (in .ninja_deps) so that editing one shared header
+        # rebuilds exactly the modules that include it - hipify may rename the
+        # recorded file, so the check tolerates the _hip / cuda_->hip_ spellings.
+        dependency_names = _build_fp.ninja_dependency_names(module_build_dir)
+        include_root = os.path.join(repo_root, "csrc", "include")
+        for suffix in ("*.h", "*.hpp", "*.cuh"):
+            for match in glob.glob(os.path.join(include_root, suffix)):
+                if not os.path.isfile(match):
+                    continue
+                if _build_fp.shared_header_referenced(os.path.basename(match), dependency_names):
+                    files.add(os.path.realpath(match))
+        return files
+
+    def _lightop_is_built(self, ext):
+        """True if the extension's ``.so`` exists anywhere a build could place it.
+
+        ``get_ext_fullpath`` resolves to the source tree under ``--inplace`` and
+        to ``build_lib`` otherwise; checking every plausible location keeps the
+        skip decision correct for both flows and for installs with a custom
+        ``package_dir`` (``python/lightop``).
+        """
+        candidates = []
+        try:
+            candidates.append(self.get_ext_fullpath(ext.name))
+        except Exception:
+            pass
+        try:
+            filename = self.get_ext_filename(ext.name)
+            candidates.append(os.path.join(self.build_lib, filename))
+            package_dir = self.get_finalized_command("build_py").get_package_dir("lightop")
+            if package_dir:
+                parts = ext.name.split(".")
+                candidates.append(os.path.join(package_dir, *parts[1:-1], filename))
+        except Exception:
+            pass
+        return any(candidate and os.path.exists(candidate) for candidate in candidates)
+
+    def _lightop_should_skip(self, ext, key, build_root, module_build_dir, declared_headers):
+        label = getattr(ext, "_lightop_name", key)
+        if getattr(self, "_lightop_user_force", False) or \
+                os.environ.get("LIGHTOP_FORCE_REBUILD", "0") == "1":
+            print(f"[LightOp] module '{label}': forced rebuild")
+            return False
+        if not self._lightop_is_built(ext):
+            return False
+        cache_path = _build_fp.fingerprint_path(build_root, key)
+        previous = _build_fp.load_fingerprint(cache_path)
+        if previous is None:
+            return False
+        signature = self._lightop_build_signature(ext)
+        watch = self._lightop_watch_files(ext, module_build_dir, declared_headers)
+        fingerprint, entries = _build_fp.compute_fingerprint(str(REPO_ROOT), watch, signature)
+        if fingerprint == previous.get("fingerprint") and previous.get("build") == signature:
+            return True
+        # The hash caught a real content change; make sure Ninja's mtime graph
+        # also sees it, because a ``git checkout`` can leave a changed file with
+        # an older mtime than the cached object (analysis §8.1). Touching only
+        # the changed files keeps layer 2 as fine-grained as possible.
+        previous_files = previous.get("files") or {}
+        for relpath, digest in entries.items():
+            if previous_files.get(relpath) != digest:
+                try:
+                    os.utime(os.path.join(str(REPO_ROOT), relpath), None)
+                except OSError:
+                    pass
+        reason = _build_fp.describe_changes(previous, entries, signature)
+        print(f"[LightOp] module '{label}': rebuilding ({reason})")
+        return False
+
+    def _lightop_store_fingerprint(self, ext, key, build_root, module_build_dir, declared_headers):
+        signature = self._lightop_build_signature(ext)
+        watch = self._lightop_watch_files(ext, module_build_dir, declared_headers)
+        fingerprint, entries = _build_fp.compute_fingerprint(str(REPO_ROOT), watch, signature)
+        _build_fp.write_fingerprint(_build_fp.fingerprint_path(build_root, key), {
+            "key": key,
+            "module": getattr(ext, "_lightop_name", key),
+            "fingerprint": fingerprint,
+            "build": signature,
+            "files": entries,
+        })
+
     def build_extension(self, ext):
-        # Keep each extension's object cache independent of the build selection.
+        # Keep each extension's object cache independent of the build selection:
+        # every module gets its own build_temp/<ext> ninja directory (layer 2).
+        key = getattr(ext, "_lightop_key", None)
+        declared_headers = getattr(ext, "_lightop_headers", []) or []
         orig_temp = self.build_temp
-        self.build_temp = os.path.join(
-            orig_temp, str(ext.name).replace('.', '__'))
+        build_root = os.path.abspath(orig_temp)
+        module_build_dir = os.path.join(build_root, str(ext.name).replace('.', '__'))
+        if not self.dry_run and key is not None:
+            try:
+                if self._lightop_should_skip(ext, key, build_root,
+                                             module_build_dir, declared_headers):
+                    print(f"[LightOp] module '{getattr(ext, '_lightop_name', key)}': "
+                          f"up to date, skipping ({ext.name})")
+                    return
+            except Exception as exc:  # bookkeeping must never break the build
+                print(f"[LightOp] fingerprint check for {ext.name} failed: {exc}")
+        self.build_temp = module_build_dir
         try:
             super().build_extension(ext)
         finally:
             self.build_temp = orig_temp
+        if not self.dry_run and key is not None:
+            try:
+                self._lightop_store_fingerprint(ext, key, build_root,
+                                                module_build_dir, declared_headers)
+            except Exception as exc:
+                print(f"[LightOp] failed to record fingerprint for {ext.name}: {exc}")
 
 
 def torch_version_over110():
@@ -587,6 +781,14 @@ def torch_version_over110():
 def torch_version_over2120():
     version=torch.__version__.split('.')
     return int(version[0])*100+int(version[1])>=212
+
+def _mark_incremental(ext, key, name, headers=None):
+    """Attach the metadata BuildReleaseExtension needs for the fingerprint skip."""
+    ext._lightop_key = key
+    ext._lightop_name = name
+    ext._lightop_headers = list(headers or [])
+    return ext
+
 
 def get_extensions():
     extensions = []
@@ -661,6 +863,21 @@ def get_extensions():
             sources.extend(matches)
         module_sources[name] = list(dict.fromkeys(sources))
 
+    # Headers the monolith (_C) may include. ``unix_wrap_ninja_compile`` compiles
+    # several source groups into one build directory and only the last group's
+    # dependency records survive in ``.ninja_deps``, so dependency-based header
+    # watching is unreliable for _C. Instead watch every header located in the
+    # monolith's own source directories, skipping directories owned by migrated
+    # modules (their headers are already watched per module).
+    migrated_dirs = {os.path.dirname(os.path.abspath(source))
+                     for sources in module_sources.values() for source in sources}
+    monolith_header_globs = []
+    for _header_dir in [f'./csrc/{_dir}' for _dir, _ in _CSRC_DIRS] + ['./csrc/include']:
+        if os.path.abspath(_header_dir) in migrated_dirs:
+            continue
+        for _pattern in ('*.h', '*.hpp', '*.cuh'):
+            monolith_header_globs.append(os.path.join(_header_dir, _pattern))
+
     indexer_prep = "./csrc/kernels/mla/dsv41_indexer_prep.cu"
     op_files = []
     if BUILD_FULL:
@@ -693,17 +910,17 @@ def get_extensions():
             define_macros=define_macros,
             extra_compile_args=extra_compile_args)
 
-        extensions.append(ext_ops)
-        extensions.append(extension(
+        extensions.append(_mark_incremental(ext_ops, "_C", "_C", monolith_header_globs))
+        extensions.append(_mark_incremental(extension(
             name="lightop._router_gemm",
             sources=["./csrc/router/router_gemm.cu"],
             extra_compile_args={"nvcc": ["-O3"]},
-        ))
-        extensions.append(extension(
+        ), "_router_gemm", "_router_gemm"))
+        extensions.append(_mark_incremental(extension(
             name="lightop._dsv41_prep",
             sources=[indexer_prep],
             extra_compile_args={"cxx": ["-O3"], "nvcc": ["-O3", "-ffp-contract=off"]},
-        ))
+        ), "_dsv41_prep", "_dsv41_prep"))
 
     # Each family supplies only its additions to the common build settings.
     for name in BUILD_MODULES:
@@ -712,7 +929,7 @@ def get_extensions():
         module_compile_args = {k: list(v) for k, v in extra_compile_args.items()}
         for compiler, flags in spec["extra_compile_args"].items():
             module_compile_args.setdefault(compiler, []).extend(flags)
-        extensions.append(extension(
+        extensions.append(_mark_incremental(extension(
             name=spec["extension"],
             sources=sources,
             include_dirs=list(include_dirs) + [
@@ -722,7 +939,7 @@ def get_extensions():
             library_dirs=[os.path.join(rocm_home, 'lib')],
             define_macros=define_macros,
             extra_compile_args=module_compile_args,
-        ))
+        ), "module:" + name, name, spec.get("headers")))
 
     return extensions
 
