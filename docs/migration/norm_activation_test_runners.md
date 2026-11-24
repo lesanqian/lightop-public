@@ -26,4 +26,4 @@ python test/run_activation_tests.py --build
 - `norm`：22 个既有 API 直接重导出、完整公开清单、LMSlim RMSQuant 绑定/签名、三组 hidden size 数值、scale、input/residual 原地更新。
 - `activation`：19 个既有 API 直接重导出、完整公开清单、LMSlim SiLU-mul quant 绑定/签名、FP16/BF16、三组 shape、INT8 输出和 scale。
 
-脚本强制检查 `build/lib.*/lightop/op*.so`，防止构建产物缺失时回退到系统安装包。任一 case 失败，脚本返回非零退出码。
+脚本强制检查 `build/lib.*/lightop/_C*.so` 或 `build/lib.*/lightop/_ext/*.so`，防止构建产物缺失时回退到系统安装包。任一 case 失败，脚本返回非零退出码。

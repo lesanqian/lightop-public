@@ -158,7 +158,7 @@ LightOp 开发规范门禁：
 
 对照旧实现或有意义的已有组合，测量等价工作，排除首次编译/加载。明确 kernel-only、包含分配/转换的调用或端到端计时；同步真实工作所在 stream，报告重复计时和离散程度。把 profiler 开销与 benchmark 延迟分开。性能退化率为 `(new - base) / base * 100%`，加速比为 `base / new`；不要虚构性能阈值。验证规模与受影响行为匹配：绑定重构不自动要求完整 kernel 优化循环。
 
-通过源码/构建配置、产物 SHA、`lightop.__file__`、`lightop.op.__file__` 及 Python/PyTorch/HIP/gfx 身份确认待测构建。“安装成功”或绿色 CI 本身不证明测了哪个源码。相关时使用兼容基线工具的 check 模式，不重写基线来隐藏非预期 API 变化。分别记录测试是否存在、CI 收集、实际执行、加载构建及 pass/fail/skip/error/timeout。没有目标硬件时，只能给静态发现和针对性命令，不能宣布数值/性能通过。
+通过源码/构建配置、产物 SHA、`lightop.__file__`、`lightop.core.owner_binary(...)` / `lightop.core.native_binaries()` 及 Python/PyTorch/HIP/gfx 身份确认待测构建。“安装成功”或绿色 CI 本身不证明测了哪个源码。相关时使用兼容基线工具的 check 模式，不重写基线来隐藏非预期 API 变化。分别记录测试是否存在、CI 收集、实际执行、加载构建及 pass/fail/skip/error/timeout。没有目标硬件时，只能给静态发现和针对性命令，不能宣布数值/性能通过。
 
 ### 4. 算子分类与公开 API
 
