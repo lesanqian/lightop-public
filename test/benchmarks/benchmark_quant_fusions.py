@@ -450,8 +450,7 @@ def rms_case(api, tokens, width, fp8, args):
     }
 
 
-def file_record(module):
-    path = getattr(module, "__file__", None)
+def file_record_from_path(path):
     if path is None:
         return None
     path = Path(path).resolve()
@@ -460,6 +459,10 @@ def file_record(module):
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return {"path": str(path), "sha256": digest.hexdigest()}
+
+
+def file_record(module):
+    return file_record_from_path(getattr(module, "__file__", None))
 
 
 def environment(api, args):
@@ -485,8 +488,8 @@ def environment(api, args):
     }
     from lightop.core import native_binaries
     binaries = {
-        name: file_record(sys.modules.get(name))
-        for name in native_binaries()
+        name: file_record_from_path(path)
+        for name, path in native_binaries().items()
     }
     bindings = {}
     for name, fn in symbols.items():

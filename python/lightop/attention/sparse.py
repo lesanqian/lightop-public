@@ -14,11 +14,23 @@ from ..fuse_topk_transform import (
     fast_kpool_topk_transform_fused,
 )
 
-convert_req_index_to_global_index = (
-    lightop_native.convert_req_index_to_global_index
+# These native ops may be absent in a selective build. Resolve them on access
+# so the remaining exports of this module stay usable.
+_LAZY_OP_ALIASES = (
+    "convert_req_index_to_global_index",
+    "top_k_per_row_decode",
+    "top_k_per_row_prefill",
 )
-top_k_per_row_decode = lightop_native.top_k_per_row_decode
-top_k_per_row_prefill = lightop_native.top_k_per_row_prefill
+
+
+def __getattr__(name):
+    if name in _LAZY_OP_ALIASES:
+        return getattr(lightop_native, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
 
 __all__ = [
     "topk_transform_1024",
