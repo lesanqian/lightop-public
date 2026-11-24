@@ -166,9 +166,10 @@ def metadata(args):
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         source_sha = None
+    from lightop.core import owner_binary
     return {"device": props.name, "arch": getattr(props, "gcnArchName", None),
             "torch": torch.__version__, "hip": torch.version.hip,
-            "lightop": lightop.__file__, "extension": op.__file__,
+            "lightop": lightop.__file__, "extension": owner_binary("bf16_mega_gate_hcu"),
             "wheel_version": getattr(version, "hcu_version", None),
             "wheel_git_hash": getattr(version, "git_hash", None),
             "dtk": getattr(version, "dtk", None), "script_git_sha": source_sha,

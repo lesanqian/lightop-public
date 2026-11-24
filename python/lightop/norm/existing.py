@@ -35,14 +35,12 @@ from ..rmsnorm import (
     rmsnorm_forward,
 )
 
-rms_norm_opt = lightop_native.rms_norm_opt
-fused_add_rms_norm_opt = lightop_native.fused_add_rms_norm_opt
-rms_norm_no_weight = lightop_native.rms_norm_no_weight
-rmsnorm_forward_autograd = lightop_native.rmsnorm_forward_autograd
-
-
-# LayerNorm may be absent when only the RMSNorm native module was built.
+# RMSNorm / LayerNorm native ops may be absent in selective builds.
 _LAZY_OP_ALIASES = (
+    "rms_norm_opt",
+    "fused_add_rms_norm_opt",
+    "rms_norm_no_weight",
+    "rmsnorm_forward_autograd",
     "layer_norm_opt",
     "fused_add_layer_norm_opt",
     "layer_norm_fwd_1pass_opt",
@@ -53,6 +51,10 @@ def __getattr__(name):
     if name in _LAZY_OP_ALIASES:
         return getattr(lightop_native, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
 
 
 __all__ = [

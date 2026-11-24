@@ -19,7 +19,6 @@ from .config import (
     get_moe_groupgemm_config_w4a8,
     get_moe_groupgemm_marlin_config_w4a8,
 )
-from .expert_parallel import ep_build_m_indices, ep_gather, ep_scatter
 from .gemm import (
     moe_gemm_w16a16,
     moe_gemm_w4a8,
@@ -50,9 +49,23 @@ from .routing import (
     moe_fused_gate_sqrtsoftplus_v41_hcu_fused,
     moe_fused_gate_sqrtsoftplus_v41_hcu_deepep,
     moe_sum,
-    topk_ids_postprocess,
-    topk_softmax,
 )
+
+_LAZY_EXPORTS = {
+    name: module
+    for module, names in {
+        ".expert_parallel": (
+            "ep_build_m_indices",
+            "ep_gather",
+            "ep_scatter",
+        ),
+        ".routing": (
+            "topk_ids_postprocess",
+            "topk_softmax",
+        ),
+    }.items()
+    for name in names
+}
 
 _LMSLIM_NATIVE_APIS = {
     "fused_experts_cuda",
@@ -71,11 +84,20 @@ _LMSLIM_NATIVE_APIS = {
 
 
 def __getattr__(name):
+    module = _LAZY_EXPORTS.get(name)
+    if module is not None:
+        value = getattr(import_module(module, __name__), name)
+        globals()[name] = value
+        return value
     if name not in _LMSLIM_NATIVE_APIS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     value = getattr(import_module(f"{__name__}.native"), name)
     globals()[name] = value
     return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
 
 
 __all__ = [

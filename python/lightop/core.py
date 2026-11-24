@@ -81,48 +81,48 @@ class _SplitOps(ModuleType):
     def __init__(self, backends):
         super().__init__("lightop.op")
         self.__file__ = __file__
-        self._deleted_exports = set()
-        self._owners = {}
+        self._backends = tuple(backends)
+        owners = {}
         for backend in backends:
             for name in dir(backend):
                 if name.startswith("__"):
                     continue
-                if name in self._owners:
-                    previous = self._owners[name].__name__
+                if name in owners:
+                    previous = owners[name].__name__
                     raise ImportError(
                         f"Duplicate LightOp native export {name!r}: "
                         f"{previous} and {backend.__name__}. Rebuild the extensions."
                     )
-                self._owners[name] = backend
-        self.__all__ = sorted(name for name in self._owners if not name.startswith("_"))
-
-    def __setattr__(self, name, value):
-        super().__setattr__(name, value)
-        deleted = self.__dict__.get("_deleted_exports")
-        if deleted is not None:
-            deleted.discard(name)
-
-    def __delattr__(self, name):
-        # Resolve uncached exports before deleting, without mutating their owner.
-        getattr(self, name)
-        super().__delattr__(name)
-        self._deleted_exports.add(name)
+                owners[name] = backend
+                setattr(self, name, getattr(backend, name))
+        self._owners = owners
+        self.__all__ = sorted(name for name in owners if not name.startswith("_"))
 
     def __getattr__(self, name):
-        if name in self._deleted_exports:
-            raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
-        backend = self._owners.get(name)
-        if backend is None:
-            raise AttributeError(
-                f"module {self.__name__!r} has no attribute {name!r}; "
-                "the required native module may not have been built"
-            )
-        value = getattr(backend, name)
-        setattr(self, name, value)
-        return value
+        raise AttributeError(
+            f"module {self.__name__!r} has no attribute {name!r}; "
+            "the required native module may not have been built"
+        )
 
-    def __dir__(self):
-        return sorted((set(super().__dir__()) | set(self._owners)) - self._deleted_exports)
+
+def native_binaries():
+    """Return {extension_module_name: so_file_path} for all loaded backends."""
+    op = load_ops()
+    return {
+        backend.__name__: getattr(backend, "__file__", None)
+        for backend in getattr(op, "_backends", ())
+    }
+
+
+def owner_binary(symbol_name):
+    """Return the .so file path owning `lightop.op.<symbol_name>`."""
+    op = load_ops()
+    fn = getattr(op, symbol_name)
+    mod_name = getattr(fn, "__module__", None)
+    if mod_name and mod_name in sys.modules:
+        return getattr(sys.modules[mod_name], "__file__", None)
+    owner = op._owners.get(symbol_name)
+    return getattr(owner, "__file__", None) if owner is not None else None
 
 
 def load_ops():

@@ -18,8 +18,6 @@ from .existing import (
     FuseBiasGelu,
     FuseBiasSwiGLU,
     GNSilu,
-    gelu_and_mul_opt,
-    gelu_tanh_and_mul_opt,
     LnAddDropout,
     LnAddDropoutBias,
     LnDropPath,
@@ -35,20 +33,38 @@ from .existing import (
     fuse_situ_mul_quant_contiguous,
     fuse_situ_mul_quant_ep,
     relu2,
-    silu_and_mul_opt,
 )
 
 from .swiglu_oai_quant import swiglu_oai_fp8_quant_masked
 
-_NATIVE_APIS = {"lm_fuse_silu_mul_quant", "fused_clamp_smooth"}
+_LAZY_EXPORTS = {
+    name: module
+    for module, names in {
+        ".existing": (
+            "gelu_and_mul_opt",
+            "gelu_tanh_and_mul_opt",
+            "silu_and_mul_opt",
+        ),
+        ".native": (
+            "lm_fuse_silu_mul_quant",
+            "fused_clamp_smooth",
+        ),
+    }.items()
+    for name in names
+}
 
 
 def __getattr__(name):
-    if name not in _NATIVE_APIS:
+    module = _LAZY_EXPORTS.get(name)
+    if module is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(import_module(f"{__name__}.native"), name)
+    value = getattr(import_module(module, __name__), name)
     globals()[name] = value
     return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
 
 
 __all__ = [

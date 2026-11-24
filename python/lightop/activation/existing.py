@@ -27,9 +27,21 @@ from ..fusereludropout import ReluDropout
 from ..groupnorm import GNSilu
 from ..layernorm import LnAddDropout, LnAddDropoutBias, LnDropout, LnDropPath
 
-gelu_and_mul_opt = lightop_native.gelu_and_mul_opt
-gelu_tanh_and_mul_opt = lightop_native.gelu_tanh_and_mul_opt
-silu_and_mul_opt = lightop_native.silu_and_mul_opt
+_LAZY_OP_ALIASES = (
+    "gelu_and_mul_opt",
+    "gelu_tanh_and_mul_opt",
+    "silu_and_mul_opt",
+)
+
+
+def __getattr__(name):
+    if name in _LAZY_OP_ALIASES:
+        return getattr(lightop_native, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
 
 __all__ = [
     "AddDropout",

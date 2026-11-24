@@ -483,7 +483,11 @@ def environment(api, args):
         "rms_int8": api.op.rms_norm_dynamic_per_token_quant_sglang,
         "rms_fp8": api.op.rms_norm_fp8_quant,
     }
-    binaries = {"lightop.op": file_record(api.op)}
+    from lightop.core import native_binaries
+    binaries = {
+        name: file_record(sys.modules.get(name))
+        for name in native_binaries()
+    }
     bindings = {}
     for name, fn in symbols.items():
         module = getattr(fn, "__module__", None)

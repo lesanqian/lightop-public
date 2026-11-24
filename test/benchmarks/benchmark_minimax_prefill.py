@@ -158,8 +158,9 @@ def main():
     if not torch.cuda.is_available():
         parser.error("an available HCU with HIP PyTorch is required")
     props = torch.cuda.get_device_properties(0)
+    from lightop.core import native_binaries
     result = {"torch": torch.__version__, "hip": torch.version.hip,
-              "lightop": lightop.__file__, "native": getattr(lightop.op, "__file__", None),
+              "lightop": lightop.__file__, "native": native_binaries(),
               "device": str(props), "args": {**vars(args), "output": str(args.output)},
               "baseline": "unfused PyTorch operations; not a previous LightOp kernel or end-to-end model",
               "results": []}
