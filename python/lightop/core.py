@@ -29,7 +29,8 @@ def load_registry(path=None):
     if not isinstance(modules, dict) or not modules:
         raise ValueError("Module registry must be a non-empty object")
     required = {"extension", "sources"}
-    allowed = required | {"include_dirs", "extra_compile_args"}
+    allowed = required | {"include_dirs", "extra_compile_args", "arch_profile"}
+    valid_arch_profiles = ("default", "marlin_w4a16", "marlin_w4a8")
     extensions = set()
     for name, spec in modules.items():
         if not name.isidentifier() or not isinstance(spec, dict):
@@ -45,6 +46,13 @@ def load_registry(path=None):
         extensions.add(extension)
         spec.setdefault("include_dirs", [])
         spec.setdefault("extra_compile_args", {})
+        spec.setdefault("arch_profile", "default")
+        arch_profile = spec["arch_profile"]
+        if not isinstance(arch_profile, str) or arch_profile not in valid_arch_profiles:
+            raise ValueError(
+                f"{name}.arch_profile: expected one of {valid_arch_profiles}, "
+                f"got {arch_profile!r}"
+            )
         for field in ("sources", "include_dirs"):
             values = spec[field]
             if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):

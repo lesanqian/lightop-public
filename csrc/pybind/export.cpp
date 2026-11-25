@@ -253,13 +253,6 @@ torch::Tensor mla_q_absorb_rope_concat(
 std::optional<Tensor> hc_mix_stats(const Tensor& x, const Tensor& w, double eps);
 std::tuple<Tensor, Tensor, Tensor> hc_mix_stats_sinkhorn_bf16x3(const Tensor&, const std::vector<Tensor>&, const Tensor&, const Tensor&, int64_t, double, double, int64_t);
 std::tuple<Tensor, Tensor, Tensor> hc_mix_stats_sinkhorn_deepgemm(const Tensor&, const std::vector<Tensor>&, const Tensor&, const Tensor&, int64_t, double, double, int64_t);
-Tensor fused_clamp_smooth(const Tensor& hidden, const Tensor& smooth, double min_limit, double max_limit);
-std::tuple<Tensor, Tensor> fused_deepep_prepare(
-    const Tensor& hidden,
-    const Tensor& smooth,
-    const Tensor& ids,
-    double min_limit,
-    double max_limit);
 void fused_dsa_cp_prefill_metadata_launcher(
     const torch::Tensor&, const torch::Tensor&, const torch::Tensor&,
     const torch::Tensor&, const std::vector<torch::Tensor>&,
@@ -374,13 +367,6 @@ Tensor fuse_rn_add_dropout_bias_forward_autograd(const Tensor& x,const Tensor& y
 Tensor fuse_rn_add_forward_autograd(const Tensor& x,const Tensor& y,const Tensor& weight,double eps,bool training,bool inplace);
 Tensor drop_path_forward_autograd(const Tensor& x,double p, bool training,bool scale_by_keep) ;
 Tensor fuse_add_dropout_forward_autograd(const Tensor& x,const Tensor& y,double rate,bool training);
-Tensor fuse_layernorm_forward_autograd(const Tensor& x,const std::optional<Tensor>& weight,const std::optional<Tensor>& bias,double eps,bool training);
-Tensor fuse_layernorm_mixed_fp32_params_autograd(const Tensor& x,const std::optional<Tensor>& weight,const std::optional<Tensor>& bias,double eps,bool training);
-Tensor fuse_add_ln_forward_autograd(const Tensor& x,const Tensor& y,const Tensor& weight,const Tensor& bias,double eps,bool training);
-Tensor fuse_ln_add_dropout_forward_autograd(const Tensor& x,const Tensor& y,const Tensor& weight,const Tensor& bias,double eps,double rate,bool training);
-Tensor fuse_ln_add_dropout_bias_forward_autograd(const Tensor& x,const Tensor& y,const Tensor& attention_bias,const Tensor& weight,const Tensor& bias,double eps,double rate,bool training);
-Tensor fuse_ln_dropout_forward_autograd(const Tensor& x,const Tensor& weight,const Tensor& bias,double eps,double rate,bool training);
-Tensor fuse_layernorm_droppath_forward_autograd(const Tensor& x,const Tensor& weight,const Tensor& bias,double eps, double keep_prob, bool scale_by_keep, bool training);
 Tensor fused_linear_bias_forward_autograd(const Tensor& input, const Tensor& weight, const Tensor& bias);
 std::tuple <Tensor, Tensor> fused_relu_dropout_forward(const Tensor &self, const double &p, const bool &use_relu, const bool &training);
 Tensor fused_relu_dropout_backward(Tensor &grad, Tensor &mask);
@@ -401,9 +387,6 @@ Tensor FusedBiasSwiGLU_forward_gpu(Tensor in, Tensor bias);
 std::vector<Tensor> FusedBiasSwiGLU_backward_gpu(Tensor out_grad,Tensor in,Tensor bias);
 std::tuple <Tensor, Tensor> fuse_bias_dropout_add_forward(const Tensor &x,const Tensor &bias,const Tensor &residual,double droprate,bool training);
 std::tuple <Tensor, Tensor> fuse_bias_dropout_add_backward(const Tensor &grad,const Tensor &mask, double droprate);
-Tensor fuse_groupnorm_forward_autograd(const Tensor& x,const Tensor& weight,const Tensor& bias,int num_groups,int num_channels,double eps,bool training);
-Tensor fuse_celu_gn_forward_autograd(const Tensor& x,const Tensor& weight,const Tensor& bias,int num_groups,int num_channels,double eps,double alpha,bool training);
-Tensor fuse_gn_silu_forward_autograd(const Tensor& x,const Tensor& weight,const Tensor& bias,int num_groups,int num_channels,double eps,bool training);
 Tensor fused_bmm(torch::Tensor x, torch::Tensor w, torch::Tensor output, torch::Tensor x_scale, torch::Tensor w_scale, std::optional<torch::Tensor> bias, torch::Dtype dtype, bool transpose_bm, bool transpose_bm_in, int mode);
 Tensor sum_opt(const Tensor& x,int dim);
 Tensor mean_opt(const Tensor& x,int dim);
@@ -415,12 +398,6 @@ void gemm_awq_w4a16_dequant(Tensor& ret,const Tensor& weight,const Tensor& scale
 Tensor w4_to_w16(const Tensor& x,const Tensor& scale_m,const Tensor& zero_m);
 Tensor gemm_w8_a16_fp8_colmajor(const Tensor& x,const Tensor& y,const Tensor& scale,int warps,int n_per_block,int splitk);
 void fp8to16(Tensor &ret, const Tensor &x,const Tensor& scale);
-Tensor moe_gemm_w8a8(torch::Tensor input,Tensor b_qweight,Tensor output,Tensor a_scale,Tensor b_scale,std::optional<Tensor> topk_weights,Tensor sorted_token_ids,Tensor expert_ids,Tensor num_tokens_post_pad, int64_t top_k, int mode, int delta);
-Tensor moe_gemm_marlin_w8a8(torch::Tensor input,Tensor b_qweight,Tensor output,Tensor a_scale,Tensor b_scale,std::optional<Tensor> topk_weights,Tensor sorted_token_ids,Tensor expert_ids,Tensor num_tokens_post_pad, int64_t top_k, int mode, int delta);
-Tensor moe_gemm_marlin_w8a8_fp8(torch::Tensor input,Tensor b_qweight,Tensor output,Tensor a_scale,Tensor b_scale,std::optional<Tensor> topk_weights,Tensor sorted_token_ids,Tensor expert_ids,Tensor num_tokens_post_pad, int64_t top_k, int mode, int delta);
-Tensor moe_gemm_marlin_w8a8_blockwise_fp8(torch::Tensor input,Tensor b_qweight,Tensor output,Tensor a_scale,Tensor b_scale,std::optional<Tensor> topk_weights,Tensor sorted_token_ids,Tensor expert_ids,Tensor num_tokens_post_pad, int64_t top_k, int mode, int delta);
-Tensor moe_gemm_w4a8(torch::Tensor input,Tensor b_qweight,Tensor output,Tensor a_scale,Tensor b_scale,std::optional<Tensor> topk_weights,Tensor sorted_token_ids,Tensor expert_ids,Tensor num_tokens_post_pad, int64_t top_k, int mode, int delta);
-Tensor moe_gemm_w16a16(torch::Tensor input,Tensor b_qweight,Tensor output,std::optional<Tensor> topk_weights,Tensor sorted_token_ids,Tensor expert_ids,Tensor num_tokens_post_pad, int64_t top_k, int mode, int delta);
 Tensor gemm_w8_a8_smooth_colmajor(const Tensor& x,const Tensor& y,const Tensor& scale_a,const Tensor& scale_b,  const std::optional<Tensor> bias, at::ScalarType out_dtype,int warps,int n_per_block, int n_per_warp, int splitk, bool use_n_warps);
 
 Tensor gemm_w8a8_smooth_asm(Tensor &A, Tensor &B, Tensor &As, Tensor &Bs, const std::optional<Tensor> bias, torch::Dtype output_dtype, int M, int N, int K, bool isTunning_slide_block, int tunning_slide_block, bool input_scale_first);
@@ -451,80 +428,6 @@ Tensor m_grouped_marlin_fp8_gemm_nt_masked_asm(Tensor input, Tensor b_qweight, T
 Tensor m_grouped_bf16_gemm_nt_masked_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor masked_m, int expected_m_per_group, int mode);
 Tensor moe_w16a16_asm(Tensor input,Tensor b_qweight,Tensor output,std::optional<Tensor> topk_weights,Tensor sorted_token_ids,Tensor expert_ids,Tensor num_tokens_post_pad, int top_k, int mode, int delta);
 Tensor moe_marlin_w16a16_asm(Tensor input,Tensor b_qweight,Tensor output,std::optional<Tensor> topk_weights,Tensor sorted_token_ids,Tensor expert_ids,Tensor num_tokens_post_pad, int top_k, int mode, int delta);
-Tensor moe_marlin_w4a16(torch::Tensor& a,
-                        std::optional<torch::Tensor> const& c_or_none,
-                        torch::Tensor& b_q_weight,
-                        torch::Tensor& b_scale_zeros,
-                        std::optional<torch::Tensor> const& g_idx_or_none,
-                        std::optional<torch::Tensor> const& perm_or_none,
-                        torch::Tensor& workspace,
-                        torch::Tensor& sorted_token_ids,
-                        torch::Tensor& expert_ids,
-                        torch::Tensor& num_tokens_past_padded,
-                        torch::Tensor& topk_weights,
-                        int64_t moe_block_size,
-                        int64_t top_k,
-                        bool mul_topk_weights,
-                        bool is_ep,
-                        int64_t size_m,
-                        int64_t size_n,
-                        int64_t size_k,
-                        bool is_k_full,
-                        bool use_atomic_add,
-                        bool use_fp32_reduce,
-                        bool is_zp_float,
-                        int64_t thread_n=-1, 
-                        int64_t thread_k=-1,
-                        int64_t blocks_per_cu=1
-                        );
-Tensor awq_marlin_repack(torch::Tensor& b_q_weight, int64_t size_k, int64_t size_n, int64_t num_bits);
-Tensor moe_marlin_w4a8(
-                        torch::Tensor& a_q,
-                        torch::Tensor& a_scales,
-                        torch::Tensor& c,
-                        torch::Tensor& b_q_weight,
-                        torch::Tensor& b_scales,
-                        torch::Tensor& workspace,
-                        torch::Tensor& global_reduce_buffer,  // 用于全局规约的缓冲区
-                        torch::Tensor& sorted_token_ids,
-                        torch::Tensor& expert_ids,
-                        torch::Tensor& num_tokens_past_padded,
-                        std::optional<torch::Tensor> topk_weights,
-                        int64_t moe_block_size,
-                        int64_t top_k,
-                        bool is_ep,
-                        int64_t size_m,
-                        int64_t size_n,
-                        int64_t size_k,
-                        int64_t thread_n,
-                        int64_t thread_k,
-                        int64_t blocks_per_cu,
-                        bool is_reduce
-                        );
-Tensor moe_marlin_w4fp8(
-                        torch::Tensor& a_q, 
-                        torch::Tensor& a_scales, 
-                        torch::Tensor& c,
-                        torch::Tensor& b_q_weight, 
-                        torch::Tensor& b_scales,
-                        torch::Tensor& workspace, 
-                        torch::Tensor& global_reduce_buffer,  // 用于全局规约的缓冲区
-                        torch::Tensor& sorted_token_ids, 
-                        torch::Tensor& expert_ids,
-                        torch::Tensor& num_tokens_past_padded, 
-                        std::optional<torch::Tensor> topk_weights,
-                        int64_t moe_block_size, 
-                        int64_t top_k, 
-                        bool is_ep,
-                        int64_t size_m, 
-                        int64_t size_n,
-                        int64_t size_k,
-                        int64_t thread_n,
-                        int64_t thread_k,
-                        int64_t blocks_per_cu,
-                        bool is_reduce
-                        );
-Tensor awq_marlin_repack_w4a8(torch::Tensor& b_q_weight, torch::Tensor& marlin_weight, int64_t size_batch, int64_t size_k, int64_t size_n);
 Tensor ds_concat(torch::Tensor input_A, torch::Tensor input_B, torch::Tensor output, int32_t mode);
 void blockwise_scaled_cast_transpose(const Tensor& input,std::optional<Tensor> output,std::optional<Tensor> scale_inv,
                                     std::optional<Tensor> output_t,std::optional<Tensor> scale_inv_t,std::optional<Tensor> noop,
@@ -548,25 +451,10 @@ void store_kv_cache_paged(const torch::Tensor& key, const torch::Tensor& value,t
 void topk_softmax(torch::Tensor& topk_weights, torch::Tensor& topk_indices,torch::optional<torch::Tensor>& token_expert_indices,torch::Tensor& gating_output,  bool Is_renormalize = false);
 void rotary_embedding_fuse(torch::Tensor& positions,  torch::Tensor& query, std::optional<torch::Tensor> key,int64_t head_size,torch::Tensor& cos_sin_cache, bool is_neox);    
 void rotary_embedding_deepseek_fuse(torch::Tensor& positions,  torch::Tensor& query, std::optional<torch::Tensor> key,int64_t head_size,torch::Tensor& cos_sin_cache, bool is_neox, std::optional<torch::Tensor> offsets, bool round_bf16_products, std::optional<torch::Tensor> query_out, std::optional<torch::Tensor> key_out);
-void moe_align_block_size(
-    torch::Tensor topk_ids, int64_t num_experts, int64_t block_size,
-    torch::Tensor sorted_token_ids, torch::Tensor experts_ids,
-    torch::Tensor num_tokens_post_pad,
-    const torch::optional<torch::Tensor> &expert_map =  torch::nullopt,
-    const torch::optional<torch::Tensor> &expert_mask =  torch::nullopt, // bool
-    const torch::optional<torch::Tensor> &num_local_tokens =  torch::nullopt,bool Is_EP = false,bool Is_fuse_fill = true); 
 
 //------------------------------------------------- groupgemm ---------------------------------------//
 Tensor groupgemm(Tensor &a, Tensor &b, Tensor &batch_sizes, bool trans_b);
-// std::tuple<Tensor, Tensor, Tensor, Tensor, Tensor> groupgemm_permute(const Tensor& tokens, const Tensor& routing_map);
-// Tensor groupgemm_unpermute(const Tensor& permuted_tokens, const Tensor& sorted_indices, const std::vector<int64_t>& restore_shape, std::optional<torch::Tensor> probs, std::optional<torch::Tensor> routing_map, const Tensor& expert_m_count);
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> groupgemm_permute(const torch::Tensor& tokens, const torch::Tensor& routing_map);
-torch::Tensor groupgemm_unpermute(const torch::Tensor& permuted_tokens, const torch::Tensor& sorted_indices, const std::vector<int64_t>& restore_shape, std::optional<torch::Tensor> probs, std::optional<torch::Tensor> routing_map, const torch::Tensor& expert_m_count, bool use_fp32);
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> fuse_groupgemm_permute_quant(const torch::Tensor& tokens, const torch::Tensor& routing_map, torch::Tensor& scales);
 //------------------------------------------------- groupgemm ---------------------------------------//
-
-std::vector<Tensor> moe_fused_gate(torch::Tensor& input, torch::Tensor& bias, int64_t num_expert_group, int64_t topk_group, int64_t topk, int64_t n_share_experts_fusion, double routed_scaling_factor, bool apply_routed_scaling_factor_on_output, bool output_indices_int64);
-std::vector<Tensor> moe_fuse_gate_per_gourp_topk(torch::Tensor& input, torch::Tensor& bias, int64_t num_expert_group, int64_t topk_per_group, int64_t num_pad_experts, int64_t num_shared_experts, double routed_scaling_factor, bool apply_routed_scaling_factor_on_output);
 
 void fuse_silu_mul_quant(torch::Tensor& input, torch::Tensor& output, torch::Tensor& scales, torch::optional<torch::Tensor> &num_local_tokens_tensor, int topK, int expert_m, torch::optional<torch::Tensor> &expert_ids) ;
 void fuse_silu_mul_clamp_quant(torch::Tensor& input, torch::Tensor& output, torch::Tensor& scales, double limit, bool use_gelu, const c10::optional<torch::Tensor>& smooth_scale, const c10::optional<torch::Tensor>& num_local_tokens_tensor = c10::nullopt, int expect_m = -1, bool round_silu = true);
@@ -580,12 +468,6 @@ void swiglu_oai_fp8_quant_masked_flat(const torch::Tensor&, torch::Tensor&, torc
 void fuse_silu_mul_fp8_quant_ep(torch::Tensor& input, torch::Tensor& output, torch::Tensor& scales, const int fp8type, torch::optional<torch::Tensor> &tokens_per_expert, torch::optional<torch::Tensor> &num_local_tokens_tensor,int topK,int expert_m, float limit);
 void fuse_silu_and_mul(torch::Tensor& input, torch::Tensor& out);
 void fuse_silu_and_mul_ep(torch::Tensor& input, torch::Tensor& out, const torch::Tensor& mask_m, int expect_m);
-void moe_sum(torch::Tensor &input,
-             torch::Tensor &output, 
-             const torch::optional<torch::Tensor> &bias = torch::nullopt ,
-             const torch::optional<torch::Tensor> &expert_mask = torch::nullopt ,
-             const torch::optional<torch::Tensor> &num_local_tokens = torch::nullopt ,
-             const float factor = 1.f,const int expect_m = -1);    
 Tensor ms_deform_attn_cuda_forward(const Tensor &value, const Tensor &spatial_shapes, const Tensor &level_start_index, const Tensor &sampling_loc, const Tensor &attn_weight, const int im2col_step);
 void ms_deform_attn_cuda_backward(const Tensor &value, const Tensor &spatial_shapes, const Tensor &level_start_index, const Tensor &sampling_loc, const Tensor &attn_weight, const Tensor &grad_output, Tensor &grad_value, Tensor &grad_sampling_loc, Tensor &grad_attn_weight, const int im2col_step);
 void mha_norm_rope_qkv_inplace_cuda(at::Tensor qkv, c10::optional<at::Tensor> gamma_q, c10::optional<at::Tensor> beta_q, c10::optional<at::Tensor> gamma_k,c10::optional<at::Tensor> beta_k,at::Tensor cos, at::Tensor sin, double eps);
@@ -609,29 +491,14 @@ std::vector<torch::Tensor> batch_linear_assignment(torch::Tensor cost);
 void fill_zeros(Tensor &out, int bs, int hidden_size);
 void rms_rotary_embedding_fuse(Tensor &positions,Tensor &query,Tensor &key,int64_t head_size,Tensor &cos_sin_cache, bool is_neox,Tensor weight_q,Tensor weight_k,c10::optional<Tensor> residual_q,c10::optional<Tensor> residual_k,double epsilon);
 void reshape_and_cache_cuda(torch::Tensor& key,torch::Tensor& value, torch::Tensor& key_cache, torch::Tensor& value_cache, torch::Tensor& slot_mapping, const std::string& kv_cache_dtype, torch::Tensor& k_scale, torch::Tensor& v_scale);
-void ep_fused_quant_scatter(torch::Tensor input,torch::Tensor topk_ids,torch::optional<torch::Tensor> expert_map_opt,torch::Tensor expert_num_tokens,torch::Tensor aq_out,torch::Tensor aq_scale_out,torch::Tensor m_indices,torch::Tensor inv_perm, int local_num_experts,int alignment);
-void ep_scatter(torch::Tensor aq,torch::Tensor aq_scale,torch::Tensor topk_ids,torch::optional<torch::Tensor> expert_map_opt, torch::Tensor expert_num_tokens,torch::Tensor aq_out,torch::Tensor aq_scale_out,torch::optional<torch::Tensor> m_indices_opt,torch::Tensor inv_perm,int local_num_experts,int alignment);
 
 void destindex_copy_quantize_int8_cuda(const torch::Tensor& input, torch::Tensor& scale_zero, torch::Tensor& output);
 void destindex_dequantize_int8_cuda(const torch::Tensor& input, const torch::Tensor& scale_zero, torch::Tensor& output);
-std::vector<at::Tensor> kimi_k2_moe_fused_gate(at::Tensor &input, at::Tensor &bias, int64_t topk,bool renormalize, double routed_scaling_factor,bool apply_routed_scaling_factor_on_output); 
 void fuse_rms_mrope_cuda(Tensor &q, Tensor &k, const Tensor &cos, const Tensor &sin, const std::vector<int>& mrope_section, int head_size, int rotary_dim,bool is_interleaved,Tensor weight_q,Tensor weight_k,c10::optional<Tensor> residual_q,c10::optional<Tensor> residual_k,double epsilon);
-void ep_gather(torch::Tensor& a,torch::Tensor& topk_ids,torch::Tensor& topk_weights,torch::Tensor& inv_perm,torch::optional<torch::Tensor> expert_map,torch::Tensor& output,bool specialize_k8 = false);
 torch::Tensor backward_polyfill_cuda(torch::Tensor vertices,torch::Tensor output,torch::Tensor nearest_edge_map,torch::Tensor grad_output,torch::Tensor grad_vertices,int width,int height,float inv_smoothness,int mode);
 std::vector<torch::Tensor> forward_polyfill_cuda(torch::Tensor vertices,torch::Tensor output,torch::Tensor nearest_edge_map,int width,int height,float inv_smoothness,int mode);
 torch::Tensor backward_polyfill_lightop(torch::Tensor vertices,torch::Tensor output,torch::Tensor nearest_edge_map,torch::Tensor grad_output,torch::Tensor grad_vertices,int width,int height,float inv_smoothness,int mode);
 std::vector<torch::Tensor> forward_polyfill_lightop(torch::Tensor vertices,torch::Tensor output,torch::Tensor nearest_edge_map,int width,int height,float inv_smoothness,int mode);
-void ep_fused_smooth_quant_scatter(
-    torch::Tensor input, 
-    torch::Tensor topk_ids,
-    torch::optional<torch::Tensor> expert_map_opt,
-    torch::Tensor expert_offsets,
-    torch::Tensor smooth_scale,
-    torch::Tensor aq_out, 
-    torch::Tensor aq_scale_out,
-    torch::Tensor m_indices, 
-    torch::Tensor inv_perm,
-    int local_num_experts, int alignment); 
 void per_token_dynamic_quant_int8(torch::Tensor& out, torch::Tensor const& input, torch::Tensor& scales, torch::Tensor const& smoothscale, bool round_after_smooth, double limit);
 void per_token_quant_int8_minimax_out(torch::Tensor&, const torch::Tensor&, torch::Tensor&, int64_t);
 void rope_per_token_quant_out(const torch::Tensor &, const torch::Tensor &,
@@ -652,8 +519,6 @@ void rms_norm_no_weight(
     torch::optional<torch::Tensor> weight,
     double epsilon);
 void fused_add_rms_norm_opt(torch::Tensor& input,torch::Tensor& residual, torch::Tensor& weight,double epsilon,double limit,bool use_aligned_loads = false);
-void layer_norm_opt(torch::Tensor& out,torch::Tensor& input,torch::Tensor& weight,torch::Tensor& bias,double epsilon,double limit);
-void fused_add_layer_norm_opt(torch::Tensor& input,torch::Tensor& residual,torch::Tensor& weight,torch::Tensor& bias,double epsilon,double limit);
 void silu_and_mul_opt(torch::Tensor& out,torch::Tensor& input);
 void gelu_and_mul_opt(torch::Tensor& out,torch::Tensor& input);
 void gelu_tanh_and_mul_opt(torch::Tensor& out,torch::Tensor& input); 
@@ -757,7 +622,6 @@ void swiglu_oai_int8_quant_masked_flat_tables(const torch::Tensor&,torch::Tensor
 void swiglu_oai_int8_quant_contiguous(const torch::Tensor&, torch::Tensor&, torch::Tensor&, double, double, double);
 void swiglu_oai_int8_quant_masked(const torch::Tensor&, torch::Tensor&, torch::Tensor&, const torch::Tensor&, double, double, double);
 std::vector<torch::Tensor> swiglu_oai_fp8_quant_contiguous(const torch::Tensor& input, double alpha, double beta, double limit);
-void moe_swiglu_dynamic_quant(torch::Tensor& scatter_tokens, torch::Tensor& smooth, torch::Tensor& experts_tokens_count, torch::Tensor& experts_tokens_start, torch::Tensor& output, torch::Tensor& scales, float beta);
 void per_token_group_quant_fp8(
     torch::Tensor& out,        
     torch::Tensor  input, 
@@ -941,31 +805,6 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> fuse_qk_quant_and_store_
     float eps = 1e-5f,        
     bool use_ue8m0 = false,
     bool is_e4m3 = true);
-void fuse_layernorm_rotary_embedding(
-    at::Tensor& positions, 
-    at::Tensor& query, 
-    at::Tensor& key,
-    int64_t head_size, 
-    at::Tensor& cos_sin_cache, 
-    bool is_neox, 
-    std::optional<at::Tensor> weight_q, 
-    std::optional<at::Tensor> bias_q,   
-    std::optional<at::Tensor> weight_k, 
-    std::optional<at::Tensor> bias_k,   
-    std::optional<at::Tensor> residual_q,
-    std::optional<at::Tensor> residual_k,
-    double epsilon);   
-std::vector<at::Tensor> fuse_norm_rope_quant_fp8(
-    at::Tensor positions, 
-    at::Tensor query, 
-    at::Tensor key,
-    int64_t head_size, 
-    at::Tensor cos_sin_cache, 
-    bool is_neox, 
-    bool is_rmsnorm,
-    std::optional<at::Tensor> weight_k, 
-    std::optional<at::Tensor> bias_k,   
-    double epsilon);      
 void fused_quantize_and_store_mla_kv_cache(
     torch::Tensor k_nope,  
     torch::Tensor k_rope,    
@@ -1001,27 +840,6 @@ std::tuple<Tensor, Tensor, Tensor> gemma_qkv_split_rms_rotary_embedding_fuse(
     int64_t head_size, Tensor& cos_sin_cache, bool is_neox, Tensor weight_q,
     Tensor weight_k, std::optional<Tensor> residual_q,
     std::optional<Tensor> residual_k, double epsilon); 
-void layer_norm_fwd_1pass_opt(
-    torch::Tensor& X,
-    torch::Tensor& Y,
-    torch::Tensor& W,
-    std::optional<torch::Tensor> B,
-    std::optional<torch::Tensor> Z,
-    std::optional<torch::Tensor> Mean,
-    torch::Tensor& Rstd,
-    int64_t stride_x_row,
-    int64_t stride_y_row,
-    int64_t stride_z_row,
-    int64_t M,
-    int64_t N,
-    double eps,
-    int64_t BLOCK_N,
-    int64_t ROWS_PER_BLOCK,
-    bool HAS_BIAS,
-    bool HAS_Z,
-    bool NORM_BEFORE_GATE,
-    bool IS_RMS_NORM,
-    const std::string& ACTIVATION);
 void fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert(
     Tensor& q,
     const Tensor& kv,
@@ -1103,32 +921,8 @@ void fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp_int32(
     const Tensor& cos_sin_cache,
     double eps,
     int64_t cache_block_size);
-void ep_build_m_indices(torch::Tensor topk_ids,torch::Tensor m_indices,int local_num_experts,int alignment);
 void topk_ids_postprocess(torch::Tensor topk_ids, torch::optional<torch::Tensor> logical_to_physical_map, torch::optional<torch::Tensor> num_token_non_padded);
 torch::Tensor dpskv4_hc_head_fused(torch::Tensor mixes, torch::Tensor x, torch::Tensor hc_scale, torch::Tensor hc_base, double hc_eps);
-void ep_fused_fp8_quant_scatter(torch::Tensor input,torch::Tensor topk_ids,torch::optional<torch::Tensor> expert_map_opt,torch::Tensor expert_num_tokens,torch::Tensor aq_out,torch::Tensor aq_scale_out,torch::Tensor m_indices,torch::Tensor inv_perm, int local_num_experts,int alignment,int fp8type,bool fill_padded_m_indices);
-std::vector<Tensor> moe_fused_gate_sqrtsoftplus(torch::Tensor& input, torch::Tensor& bias, int64_t topk, int64_t num_fused_shared_experts, bool renormalize, double routed_scaling_factor, bool apply_routed_scaling_factor_on_output);
-std::vector<Tensor> bf16_mega_gate_hcu_impl(
-    const Tensor& x, const Tensor& weight, const torch::optional<Tensor>& optional_bias, int64_t topk,
-    bool renormalize, double routed_scaling_factor, bool apply_scale,
-    const torch::optional<std::vector<Tensor>>& out,
-    const torch::optional<Tensor>& optional_mask);
-std::tuple<Tensor, Tensor> bf16_mega_gate_hcu(
-    const Tensor& x, const Tensor& weight, int64_t num_topk,
-    bool use_shared_as_routed, int64_t num_shared_experts,
-    double routed_scaling_factor, int64_t ep_rank, const std::string& scoring_func,
-    const torch::optional<Tensor>& mask, const torch::optional<Tensor>& bias,
-    const torch::optional<Tensor>& image_bias,
-    const torch::optional<Tensor>& image_token_mask,
-    const torch::optional<Tensor>& fix_routing_mask,
-    const torch::optional<Tensor>& to_physical_map,
-    const torch::optional<Tensor>& logical_count,
-    const torch::optional<Tensor>& unmapped_topk_idx,
-    const torch::optional<Tensor>& force_random,
-    const torch::optional<std::tuple<Tensor, Tensor>>& out);
-std::vector<Tensor> moe_fused_gate_sqrtsoftplus_v41_hcu(torch::Tensor& input, torch::Tensor& bias, int64_t topk, int64_t num_fused_shared_experts, bool renormalize, double routed_scaling_factor, bool apply_routed_scaling_factor_on_output);
-std::vector<Tensor> moe_fused_gate_sqrtsoftplus_v41_hcu_fused(torch::Tensor& input, torch::Tensor& bias, int64_t topk, int64_t num_fused_shared_experts, bool renormalize, double routed_scaling_factor, bool apply_routed_scaling_factor_on_output, torch::optional<torch::Tensor> num_token_non_padded);
-std::vector<Tensor> moe_fused_gate_sqrtsoftplus_v41_hcu_deepep(torch::Tensor& input, torch::Tensor& bias, int64_t topk, int64_t num_fused_shared_experts, bool renormalize, double routed_scaling_factor, bool apply_routed_scaling_factor_on_output, torch::optional<torch::Tensor> num_token_non_padded);
 void topk_transform_512(
     const at::Tensor& scores,
     const at::Tensor& seq_lens,
@@ -1248,14 +1042,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &lightop_int8_blaslt::scaled_mm,
         py::arg("input"), py::arg("weight"), py::arg("scale_input"),
         py::arg("scale_weight"), py::arg("solution"));
-  m.def("layernorm_forward_autograd", &at::native::fuse_layernorm_forward_autograd, "layernorm forward");
-  m.def("layernorm_mixed_fp32_params_forward_autograd", &at::native::fuse_layernorm_mixed_fp32_params_autograd,
-        "layernorm forward, activations half/bf16 and weight/bias float32");
-  m.def("add_ln_forward_autograd", &at::native::fuse_add_ln_forward_autograd, "layernorm forward");
-  m.def("ln_dropout_forward_autograd", &at::native::fuse_ln_dropout_forward_autograd, "fused_ln_dropout forward");
-  m.def("ln_add_dropout_forward_autograd", &at::native::fuse_ln_add_dropout_forward_autograd, "fused_ln_add_dropout forward");
-  m.def("ln_add_dropout_bias_forward_autograd", &at::native::fuse_ln_add_dropout_bias_forward_autograd, "fused_ln_add_dropout_bias forward");
-  m.def("layernorm_droppath_forward_autograd", &at::native::fuse_layernorm_droppath_forward_autograd, "layernorm then droppath forward");
 
   m.def("grid_sample_forward_autograd", &at::native::grid_sample_forward_autograd, "grid_sample forward autograd");
   m.def("grid_sample_forward", &at::native::grid_sample_forward, "grid_sample forward");
@@ -1288,9 +1074,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("fused_bmm", &at::native::fused_bmm, "fused transepose bmm transpose");
   m.def("bias_dropout_add_forward", &at::native::fuse_bias_dropout_add_forward, "fuse_bias_dropout_add forward");
   m.def("bias_dropout_add_backward", &at::native::fuse_bias_dropout_add_backward, "fuse_bias_dropout_add backward");
-  m.def("groupnorm_forward_autograd", &at::native::fuse_groupnorm_forward_autograd, "groupnorm forward");
-  m.def("celu_gn_forward_autograd", &at::native::fuse_celu_gn_forward_autograd, "celu_gn forward");
-  m.def("gn_silu_forward_autograd", &at::native::fuse_gn_silu_forward_autograd, "gn_silu forward");
   m.def("sum_opt", &at::native::sum_opt, "sum_opt");
   m.def("mean_opt", &at::native::mean_opt, "mean_opt");
   m.def("topk_opt", &at::native::topk_opt, "topk_opt");
@@ -1309,11 +1092,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("m_grouped_w8a8_gemm_nt_contig_asm", &at::native::m_grouped_w8a8_gemm_nt_contig_asm, "m_grouped_w8a8_gemm_nt_contig_asm");
   m.def("m_grouped_w16a16_gemm_nt_contig_asm",&at::native::m_grouped_w16a16_gemm_nt_contig_asm,"m_grouped_w16a16_gemm_nt_contig_asm");
   m.def("m_grouped_w8a8_gemm_nt_nopad_contig_asm",&at::native::m_grouped_w8a8_gemm_nt_nopad_contig_asm,"m_grouped_w8a8_gemm_nt_nopad_contig_asm");
-  m.def("moe_gemm_w8a8", &at::native::moe_gemm_w8a8, "moe_gemm_w8a8");
-  m.def("moe_gemm_marlin_w8a8", &at::native::moe_gemm_marlin_w8a8, "moe_gemm_marlin_w8a8");
-  m.def("moe_gemm_marlin_w8a8_fp8", &at::native::moe_gemm_marlin_w8a8_fp8, "moe_gemm_marlin_w8a8_fp8");
-  m.def("moe_gemm_marlin_w8a8_blockwise_fp8", &at::native::moe_gemm_marlin_w8a8_blockwise_fp8, "moe_gemm_marlin_w8a8_blockwise_fp8");
-  m.def("moe_gemm_w4a8", &at::native::moe_gemm_w4a8, "moe_gemm_w4a8");
   m.def("gemm_w8_a8_smooth_colmajor", &at::native::gemm_w8_a8_smooth_colmajor, "gemm_w8_a8_smooth_colmajor");
   m.def("gemm_w8a8_smooth_asm", &at::native::gemm_w8a8_smooth_asm, "gemm_w8a8_smooth_asm",
         py::arg("A"), py::arg("B"), py::arg("As"), py::arg("Bs"), py::arg("bias"),
@@ -1333,18 +1111,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("moe_marlin_w8a8_fp8_asm", &at::native::moe_marlin_w8a8_fp8_asm, "moe_marlin_w8a8_fp8_asm");
   m.def("moe_w4a8_asm", &at::native::moe_w4a8_asm, "moe_w4a8_asm");
   m.def("moe_w4a8_marlin_asm", &at::native::moe_w4a8_marlin_asm, "moe_w4a8_marlin_asm");
-  m.def("moe_gemm_w16a16", &at::native::moe_gemm_w16a16, "moe_gemm_w16a16");
   m.def("moe_groupgemm_w4a8_asm", &at::native::moe_groupgemm_w4a8_asm, "moe_groupgemm_w4a8_asm");
   m.def("moe_groupgemm_marlin_w4a8_asm", &at::native::moe_groupgemm_marlin_w4a8_asm, "moe_groupgemm_marlin_w4a8_asm");
   m.def("m_grouped_marlin_w4a8_gemm_nt_masked_asm", &at::native::m_grouped_marlin_w4a8_gemm_nt_masked_asm, "m_grouped_marlin_w4a8_gemm_nt_masked_asm");
   m.def("m_grouped_marlin_w8a8_gemm_nt_masked_asm", &at::native::m_grouped_marlin_w8a8_gemm_nt_masked_asm, "m_grouped_marlin_w8a8_gemm_nt_masked_asm");
   m.def("m_grouped_marlin_fp8_gemm_nt_masked_asm", &at::native::m_grouped_marlin_fp8_gemm_nt_masked_asm, "m_grouped_marlin_fp8_gemm_nt_masked_asm");
   m.def("m_grouped_bf16_gemm_nt_masked_asm", &at::native::m_grouped_bf16_gemm_nt_masked_asm, "m_grouped_bf16_gemm_nt_masked_asm");
-  m.def("moe_marlin_w4a16", &at::native::moe_marlin_w4a16, "moe_marlin_w4a16");
-  m.def("moe_marlin_w4a8", &at::native::moe_marlin_w4a8, "moe_marlin_w4a8");
-  m.def("moe_marlin_w4fp8", &at::native::moe_marlin_w4fp8, "moe_marlin_w4fp8");
-  m.def("awq_marlin_repack", &at::native::awq_marlin_repack, "awq_marlin_repack");
-  m.def("awq_marlin_repack_w4a8", &at::native::awq_marlin_repack_w4a8, "awq_marlin_repack_w4a8");
   m.def("blockwise_scaled_cast_transpose", &at::native::blockwise_scaled_cast_transpose, "blockwise_scaled_cast_transpose");
 
   m.def("rotary_embedding_fuse", &at::native::rotary_embedding_fuse, "rotary_embedding_fuse",py::arg("positions"),py::arg("query"),py::arg("key"),py::arg("head_size"),py::arg("cos_sin_cache"),py::arg("is_neox"));
@@ -1358,34 +1130,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("round_bf16_products") = false,
         py::arg("query_out") = py::none(), py::arg("key_out") = py::none());
   m.def("groupgemm",&at::native::groupgemm,"groupgemm");
-  m.def("groupgemm_permute",&at::native::groupgemm_permute,"groupgemm_permute");
-  m.def("groupgemm_unpermute",&at::native::groupgemm_unpermute,"groupgemm_unpermute");
-  m.def("fuse_groupgemm_permute_quant",&at::native::fuse_groupgemm_permute_quant,"fuse_groupgemm_permute_quant");
-  m.def(
-      "moe_fused_gate",
-      &at::native::moe_fused_gate,
-      "moe_fused_gate",
-      py::arg("input"),
-      py::arg("bias"),
-      py::arg("num_expert_group"),
-      py::arg("topk_group"),
-      py::arg("topk"),
-      py::arg("n_share_experts_fusion"),
-      py::arg("routed_scaling_factor"),
-      py::arg("apply_routed_scaling_factor_on_output") = true,
-      py::arg("output_indices_int64") = false);
-  m.def(
-      "moe_fuse_gate_per_gourp_topk",
-      &at::native::moe_fuse_gate_per_gourp_topk,
-      "SparkV1 per-group top-k fused MoE gate",
-      py::arg("input"),
-      py::arg("bias"),
-      py::arg("num_expert_group"),
-      py::arg("topk_per_group"),
-      py::arg("num_pad_experts"),
-      py::arg("num_shared_experts"),
-      py::arg("routed_scaling_factor"),
-      py::arg("apply_routed_scaling_factor_on_output") = true);
   m.def("fuse_silu_mul_quant",&at::native::fuse_silu_mul_quant,"fuse_silu_mul_quant");
   m.attr("SILU_CLAMP_QUANT_ROUNDING_VERSION") = 2;
   m.def(
@@ -1438,28 +1182,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("ds_concat",&at::native::ds_concat,"ds_concat");
   m.def("ms_deform_attn_forward", &at::native::ms_deform_attn_cuda_forward,"ms_deform_attn_forward");
   m.def("ms_deform_attn_backward", &at::native::ms_deform_attn_cuda_backward,"ms_deform_attn_backward");
-  m.def("moe_sum", &at::native::moe_sum, "moe_sum",
-      py::arg("input"),
-      py::arg("output"),
-      py::arg("bias")  =   torch::nullopt ,
-      py::arg("expert_mask") =   torch::nullopt,
-      py::arg("num_local_tokens") =   torch::nullopt,
-      py::arg("factor") = 1.0f,
-      py::arg("expect_m") = -1
-  );
-  m.def("moe_align_block_size", &at::native::moe_align_block_size, "moe_align_block_size",
-      py::arg("topk_ids"),
-      py::arg("num_experts"),
-      py::arg("block_size"),
-      py::arg("sorted_token_ids"),
-      py::arg("experts_ids"),
-      py::arg("num_tokens_post_pad"),
-      py::arg("expert_map") =   torch::nullopt,
-      py::arg("expert_mask") =   torch::nullopt,
-      py::arg("num_local_tokens") =   torch::nullopt,
-      py::arg("Is_EP") = false,
-      py::arg("Is_fuse_fill") = true
-  );
   m.def("mha_norm_rope_qkv_inplace_cuda", &at::native::mha_norm_rope_qkv_inplace_cuda,"mha_norm_rope_qkv_inplace_cuda");
   m.def("cross_norm_rope_q_kv_inplace_cuda", &at::native::cross_norm_rope_q_kv_inplace_cuda,"cross_norm_rope_q_kv_inplace_cuda");
   m.def("box_cost", &at::native::box_cost, "box_cost");
@@ -1482,21 +1204,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("fill_zeros", &at::native::fill_zeros,"fill_zeros");
 
   m.def("reshape_and_cache_cuda", &at::native::reshape_and_cache_cuda,"reshape_and_cache_cuda");
-  m.def("ep_fused_quant_scatter", &at::native::ep_fused_quant_scatter,"ep_fused_quant_scatter");
-  m.def("ep_scatter", &at::native::ep_scatter,"ep_scatter");
   m.def("destindex_copy_quantize_int8_cuda", &at::native::destindex_copy_quantize_int8_cuda, "destindex_copy_quantize_int8_cuda");
   m.def("destindex_dequantize_int8_cuda", &at::native::destindex_dequantize_int8_cuda, "destindex_dequantize_int8_cuda");
-  m.def("kimi_k2_moe_fused_gate", &at::native::kimi_k2_moe_fused_gate, "kimi_k2_moe_fused_gate");
 
-  m.def("ep_gather", &at::native::ep_gather, "ep_gather",
-        py::arg("a"), py::arg("topk_ids"), py::arg("topk_weights"),
-        py::arg("inv_perm"), py::arg("expert_map"), py::arg("output"),
-        py::arg("specialize_k8") = false);
   m.def("backward_polyfill_cuda", &at::native::backward_polyfill_cuda, "backward_polyfill_cuda");
   m.def("forward_polyfill_cuda", &at::native::forward_polyfill_cuda, "forward_polyfill_cuda");
   m.def("forward_polyfill_lightop", &at::native::forward_polyfill_lightop, "forward_polyfill_lightop");
   m.def("backward_polyfill_lightop", &at::native::backward_polyfill_lightop, "backward_polyfill_lightop");
-  m.def("ep_fused_smooth_quant_scatter", &at::native::ep_fused_smooth_quant_scatter, "ep_fused_smooth_quant_scatter");
   m.def(
       "per_token_dynamic_quant_int8",
       &at::native::per_token_dynamic_quant_int8,
@@ -1528,15 +1242,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("top_k_top_p_sampling_from_probs", &lightop::sampling::top_k_top_p_sampling_from_probs, "top_k_top_p_sampling_from_probs");
   m.def("top_k_first_top_p_sampling_from_probs", &lightop::sampling::top_k_first_top_p_sampling_from_probs, "top_k_first_top_p_sampling_from_probs");
 
-  m.def(
-      "layer_norm_opt", &at::native::layer_norm_opt, "layer_norm_opt",
-      py::arg("out"), py::arg("input"), py::arg("weight"), py::arg("bias"),
-      py::arg("epsilon"), py::arg("limit") = -1.0);
-  m.def(
-      "fused_add_layer_norm_opt", &at::native::fused_add_layer_norm_opt,
-      "fused_add_layer_norm_opt", py::arg("input"), py::arg("residual"),
-      py::arg("weight"), py::arg("bias"), py::arg("epsilon"),
-      py::arg("limit") = -1.0);
   m.def("silu_and_mul_opt", &at::native::silu_and_mul_opt, "silu_and_mul_opt");
   m.def("gelu_and_mul_opt", &at::native::gelu_and_mul_opt, "gelu_and_mul_opt");
   m.def("gelu_tanh_and_mul_opt", &at::native::gelu_tanh_and_mul_opt, "gelu_tanh_and_mul_opt");
@@ -1588,7 +1293,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
  m.def("swiglu_oai_int8_quant_contiguous", &at::native::swiglu_oai_int8_quant_contiguous, "BF16-rounded OAI row INT8 quantization");
  m.def("swiglu_oai_int8_quant_masked", &at::native::swiglu_oai_int8_quant_masked, "Masked BF16-rounded OAI row INT8 quantization with zero/unit padding");
  m.def("swiglu_oai_fp8_quant_contiguous", &at::native::swiglu_oai_fp8_quant_contiguous, "Contiguous BF16 OAI activation and per-token E4M3FN quantization", pybind11::arg("input"), pybind11::arg("alpha") = 1.702, pybind11::arg("beta") = 1.0, pybind11::arg("limit") = 7.0);
- m.def("moe_swiglu_dynamic_quant", &at::native::moe_swiglu_dynamic_quant, "moe_swiglu_dynamic_quant");  
  m.def("per_token_group_quant_fp8", &at::native::per_token_group_quant_fp8, "per_token_group_quant_fp8");  
  m.def("top_k_per_row_prefill", &at::native::top_k_per_row_prefill, "top_k_per_row_prefill");  
  m.def("top_k_per_row_decode", &at::native::top_k_per_row_decode, "top_k_per_row_decode");  
@@ -1681,35 +1385,11 @@ m.def(
      "DPSKV4 fused dual-cache paged gather, BF16 upconvert, and compact indices");
  m.def("fuse_act_quant_and_store_index_k_cache", &at::native::fuse_act_quant_and_store_index_k_cache, "fuse_act_quant_and_store_index_k_cache");
  m.def("fuse_qk_quant_and_store_index_k_cache", &at::native::fuse_qk_quant_and_store_index_k_cache, "fuse_qk_quant_and_store_index_k_cache");
- m.def("fuse_layernorm_rotary_embedding", &at::native::fuse_layernorm_rotary_embedding, "fuse_layernorm_rotary_embedding");
- m.def("fuse_norm_rope_quant_fp8", &at::native::fuse_norm_rope_quant_fp8, "fuse_norm_rope_quant_fp8");
  m.def("fused_quantize_and_store_mla_kv_cache", &at::native::fused_quantize_and_store_mla_kv_cache, "fused_quantize_and_store_mla_kv_cache");
 m.def("fused_quantize_and_store_mla_kv_cache_dual", &at::native::fused_quantize_and_store_mla_kv_cache_dual, py::arg("k_nope"), py::arg("k_rope"), py::arg("kv_buffer"), py::arg("loc"), py::arg("mirror_buffer") = py::none(), py::arg("mirror_loc") = py::none(), py::arg("concat_out") = py::none(), py::arg("eps") = 1e-6f);
 m.def("main_kv_loc_to_compact", &at::native::main_kv_loc_to_compact, py::arg("loc"), py::arg("physical_to_compact"), py::arg("page_size"));
  m.def("fused_concat_and_store_mla_kv_cache", &at::native::fused_concat_and_store_mla_kv_cache, "fused_concat_and_store_mla_kv_cache");
 
- m.def("layer_norm_fwd_1pass_opt", &at::native::layer_norm_fwd_1pass_opt,
-       "layer_norm_fwd_1pass_opt",
-       py::arg("X"),
-       py::arg("Y"),
-       py::arg("W"),
-       py::arg("B"),
-       py::arg("Z"),
-       py::arg("Mean"),
-       py::arg("Rstd"),
-       py::arg("stride_x_row"),
-       py::arg("stride_y_row"),
-       py::arg("stride_z_row"),
-       py::arg("M"),
-       py::arg("N"),
-       py::arg("eps"),
-       py::arg("BLOCK_N"),
-       py::arg("ROWS_PER_BLOCK"),
-       py::arg("HAS_BIAS"),
-       py::arg("HAS_Z"),
-       py::arg("NORM_BEFORE_GATE"),
-       py::arg("IS_RMS_NORM"),
-       py::arg("ACTIVATION"));
  m.def("fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert", &at::native::fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert, "fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert");
  m.def("quantize_nope_fp8_rope_bf16_pack", &at::native::quantize_nope_fp8_rope_bf16_pack, "quantize_nope_fp8_rope_bf16_pack");
  m.def("fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_int32", &at::native::fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_int32, "fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_int32");
@@ -1718,8 +1398,6 @@ m.def("main_kv_loc_to_compact", &at::native::main_kv_loc_to_compact, py::arg("lo
  m.def("fused_deepseek_v4_qnorm_rope_kvnorm_rope", &at::native::fused_deepseek_v4_qnorm_rope_kvnorm_rope, "fused_deepseek_v4_qnorm_rope_kvnorm_rope");
  m.def("fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp", &at::native::fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp, "fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp");
  m.def("fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp_int32", &at::native::fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp_int32, "fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp_int32");
- m.def("ep_build_m_indices", &at::native::ep_build_m_indices,"ep_build_m_indices");
- m.def("ep_fused_fp8_quant_scatter", &at::native::ep_fused_fp8_quant_scatter,"ep_fused_fp8_quant_scatter");
  m.def("quantize_nope_fp8_rope_bf16_pack_store", &at::native::quantize_nope_fp8_rope_bf16_pack_store, "quantize_nope_fp8_rope_bf16_pack_store");
  m.def("supports_mhc_repeat_cp_sglang", &at::native::supports_mhc_repeat_cp_sglang,
        "Metadata-only SGLang mHC repeat+CP preflight",
@@ -1758,42 +1436,6 @@ m.def("main_kv_loc_to_compact", &at::native::main_kv_loc_to_compact, py::arg("lo
        py::arg("page_size"),
        py::arg("seq_len_delta"),
        py::arg("use_swa"));
-m.def("moe_fused_gate_sqrtsoftplus",&at::native::moe_fused_gate_sqrtsoftplus,"moe_fused_gate_sqrtsoftplus");       
-m.def("bf16_mega_gate_hcu", &at::native::bf16_mega_gate_hcu,
-      py::arg("x"), py::arg("weight"), py::arg("num_topk"),
-      py::arg("use_shared_as_routed"), py::arg("num_shared_experts"),
-      py::arg("routed_scaling_factor"), py::arg("ep_rank"),
-      py::arg("scoring_func") = "sqrtsoftplus", py::arg("mask") = py::none(),
-      py::arg("bias") = py::none(), py::arg("image_bias") = py::none(),
-      py::arg("image_token_mask") = py::none(), py::arg("fix_routing_mask") = py::none(),
-      py::arg("to_physical_map") = py::none(), py::arg("logical_count") = py::none(),
-      py::arg("unmapped_topk_idx") = py::none(), py::arg("force_random") = py::none(),
-      py::arg("out") = py::none());
-m.attr("bf16_mega_gate_hcu_api_version") = 4;
-m.def("_bf16_mega_gate_hcu", &at::native::bf16_mega_gate_hcu_impl,
-      "HCU BF16 fused router with per-stream counters and managed scratch",
-      py::arg("x"), py::arg("weight"), py::arg("bias"), py::arg("topk") = 6,
-      py::arg("renormalize") = true, py::arg("routed_scaling_factor") = 1.0,
-      py::arg("apply_scale") = false, py::arg("out") = py::none(),
-      py::arg("mask") = py::none());
-m.def("moe_fused_gate_sqrtsoftplus_v41_hcu",&at::native::moe_fused_gate_sqrtsoftplus_v41_hcu,"moe_fused_gate_sqrtsoftplus_v41_hcu");
-m.def("moe_fused_gate_sqrtsoftplus_v41_hcu_fused",
-      &at::native::moe_fused_gate_sqrtsoftplus_v41_hcu_fused,
-      py::arg("input"), py::arg("bias"), py::arg("topk"),
-      py::arg("num_fused_shared_experts"), py::arg("renormalize"),
-      py::arg("routed_scaling_factor"),
-      py::arg("apply_routed_scaling_factor_on_output"),
-      py::arg("num_token_non_padded") = py::none());
-m.def("moe_fused_gate_sqrtsoftplus_v41_hcu_deepep",
-      &at::native::moe_fused_gate_sqrtsoftplus_v41_hcu_deepep,
-      py::arg("input"), py::arg("bias"), py::arg("topk"),
-      py::arg("num_fused_shared_experts"), py::arg("renormalize"),
-      py::arg("routed_scaling_factor"),
-      py::arg("apply_routed_scaling_factor_on_output"),
-      py::arg("num_token_non_padded") = py::none());
-m.def("fused_clamp_smooth", &at::native::fused_clamp_smooth, "fused_clamp_smooth");
-m.def("fused_deepep_prepare", &at::native::fused_deepep_prepare,
-      "fused_deepep_prepare");
 m.def("fuse_silu_and_mul_ep",&at::native::fuse_silu_and_mul_ep,"fuse_silu_and_mul_ep");
 m.def(
      "topk_transform_512",

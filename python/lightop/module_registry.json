@@ -19,5 +19,59 @@
             "./csrc/kernels/index_k_int8_dequant/*.cu",
             "./csrc/mqa_logits/binding_mqa.cpp"
         ]
+    },
+    "marlin_w4a16": {
+        "extension": "lightop._ext.module_marlin_w4a16",
+        "arch_profile": "marlin_w4a16",
+        "sources": [
+            "./csrc/moe_marlin_gemm/w4a16/moe_w4a16.cu",
+            "./csrc/moe_marlin_gemm/w4a16/binding_marlin_w4a16.cpp"
+        ]
+    },
+    "marlin_w4a8": {
+        "extension": "lightop._ext.module_marlin_w4a8",
+        "arch_profile": "marlin_w4a8",
+        "sources": [
+            "./csrc/moe_marlin_gemm/w4a8/moe_w4a8.cu",
+            "./csrc/moe_marlin_gemm/w4a8/binding_marlin_w4a8.cpp"
+        ]
+    },
+    "marlin_w4fp8": {
+        "extension": "lightop._ext.module_marlin_w4fp8",
+        "arch_profile": "marlin_w4a8",
+        "sources": [
+            "./csrc/moe_marlin_gemm/w4fp8/moe_w4fp8.cu",
+            "./csrc/moe_marlin_gemm/w4fp8/binding_marlin_w4fp8.cpp"
+        ]
+    },
+    "layernorm": {
+        "extension": "lightop._ext.module_layernorm",
+        "sources": [
+            "./csrc/kernels/layernorm/*.cu",
+            "./csrc/kernels/layernorm/binding_layernorm.cpp"
+        ]
+    },
+    "groupnorm": {
+        "extension": "lightop._ext.module_groupnorm",
+        "sources": [
+            "./csrc/kernels/groupnorm/*.cu",
+            "./csrc/kernels/groupnorm/binding_groupnorm.cpp"
+        ]
+    },
+    "moe": {
+        "extension": "lightop._ext.module_moe",
+        "sources": [
+            "./csrc/moe_gemm/w16a16/moe_w16a16.cu",
+            "./csrc/moe_gemm/w4a8/moe_w4a8.cu",
+            "./csrc/moe_gemm/w8a8/*.cu",
+            "./csrc/kernels/moe_gate/*.cu",
+            "./csrc/kernels/moe_align_sum_kernels.cu",
+            "./csrc/kernels/moe_swiglu_dynamic_quant.cu",
+            "./csrc/kernels/groupgemm_permute_unpermute.cu",
+            "./csrc/kernels/fuse_groupgemm_permute_quant.cu",
+            "./csrc/kernels/deepgemm_moe_permute.cu",
+            "./csrc/kernels/fused_deepep_prepare.cu",
+            "./csrc/moe_gemm/binding_moe.cpp"
+        ]
     }
 }
