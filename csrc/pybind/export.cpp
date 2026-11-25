@@ -95,103 +95,28 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
 }
 
 #else
-#include <optional>
-#include "../mqa_logits/sparse/paged_sparse_mqa_logits.h"
-#include "../mqa_logits/sparse/paged_sparse_mqa_logits_metadata.h"
-#include "../mqa_logits/sparse/prefill_sparse_fusion.h"
-#include "../mqa_logits/sparse/prefill_sparse_sort.h"
-
 #if defined(LIGHTOP_SPARSE_MQA_ONLY) && defined(LIGHTOP_PREFILL_FUSION_ONLY)
 #error "Select only one focused LightOp extension"
 #endif
 
+// Local correctness/performance builds use the same shared sparse MQA bindings.
 #if defined(LIGHTOP_SPARSE_MQA_ONLY) || defined(LIGHTOP_PREFILL_FUSION_ONLY)
-namespace {
-#if !defined(LIGHTOP_PREFILL_FUSION_ONLY)
-void bind_paged_sparse_mqa(pybind11::module_& m) {
-  namespace py = pybind11;
-#ifdef PREFILL_SPARSE_MQA_BUILD_ID
-  m.attr("PAGED_SPARSE_MQA_BUILD_ID") = PREFILL_SPARSE_MQA_BUILD_ID;
-#endif
-#ifdef PREFILL_SPARSE_MQA_CONSUMER_SHA256
-  m.attr("PAGED_SPARSE_MQA_CONSUMER_SHA256") = PREFILL_SPARSE_MQA_CONSUMER_SHA256;
-#endif
-  m.attr("PAGED_SPARSE_MQA_LOGITS_ABI") = 3;
-  m.attr("PAGED_SPARSE_MQA_METADATA_FORMAT") = "deepgemm_paged_sparse_v1";
-  m.def("fp8_fp4_paged_sparse_mqa_logits",
-        &lightop::deep_gemm::fp8_fp4_paged_sparse_mqa_logits,
-        "MXFP4/MXFP8 paged sparse logits, FP32 weights/output, Prefill/Decode dispatch",
-        py::arg("q"), py::arg("q_scales"), py::arg("fused_kv_cache"),
-        py::arg("weights"), py::arg("metadata"), py::arg("num_max_sparse_blocks"),
-        py::arg("sparse_block_kv"), py::arg("context_lens") = std::nullopt,
-        py::arg("sparse_kv_block_indices") = std::nullopt,
-        py::arg("output") = std::nullopt, py::arg("num_sms") = std::nullopt,
-        py::arg("is_prefill") = false);
-  m.attr("sparse_fp8_fp4_paged_mqa_logits") = m.attr("fp8_fp4_paged_sparse_mqa_logits");
-  m.def("get_paged_sparse_mqa_logits_metadata",
-        &lightop::deep_gemm::get_paged_sparse_mqa_logits_metadata,
-        "DeepGEMM get_paged_sparse_mqa_logits_metadata: merged sparse KV splits and persistent schedule",
-        py::arg("context_lens"), py::arg("block_table"), py::arg("indices"), py::arg("page_kv"),
-        py::arg("sparse_kv_block_indices"), py::arg("qk_dtype"), py::arg("sparse_block_kv"),
-        py::arg("num_sms") = std::nullopt);
-  m.def("get_paged_sparse_mqa_logits_metadata_bytes",
-        &lightop::deep_gemm::get_paged_sparse_mqa_logits_metadata_bytes,
-        "Size of get_paged_sparse_mqa_logits_metadata's output",
-        py::arg("num_q_tokens"), py::arg("num_max_sparse_blocks"), py::arg("sparse_block_kv"),
-        py::arg("split_kv"), py::arg("num_sms"));
-    m.def("prefill_sparse_fp8_fp4_paged_mqa_logits", &lightop::deep_gemm::prefill_sparse_fp8_fp4_paged_mqa_logits,
-          py::arg("q"),py::arg("scales"),py::arg("kv"),py::arg("weights"),py::arg("lens"),py::arg("table"),
-          py::arg("indices"),py::arg("candidates"),py::arg("capacity"),py::arg("block"),py::arg("num_sms")=std::nullopt,
-          py::arg("paired_rows")=false,py::arg("threads")=0);
-}
-#endif
+#include "../mqa_logits/sparse/bind_sparse_mqa.h"
 
-#if !defined(LIGHTOP_SPARSE_MQA_ONLY)
-void bind_prefill_sparse_fusion(pybind11::module_& m) {
-#ifdef PREFILL_FUSION_BUILD_ID
-  m.attr("PREFILL_SPARSE_FUSION_BUILD_ID") = PREFILL_FUSION_BUILD_ID;
-#endif
-  m.attr("PREFILL_SPARSE_SORT_ABI") = 1;
-  m.attr("PREFILL_SPARSE_FUSION_ABI")=1;
-  m.def("prefill_sparse_native_prepare_query", &prefill_sparse_native_prepare_query);
-  m.def("prefill_sparse_native_prepare_candidates", &prefill_sparse_native_prepare_candidates);
-  m.def("prefill_sparse_native_finalize", &prefill_sparse_native_finalize);
-  m.def("prefill_sparse_sort_candidates", &prefill_sparse_sort_candidates);
-  m.def("prefill_sparse_finalize_indices", &prefill_sparse_finalize_indices);
-}
-#endif
-}  // namespace
-#endif
-
-// Local correctness/performance builds use the same bindings as lightop.op.
-#if defined(LIGHTOP_SPARSE_MQA_ONLY) || defined(LIGHTOP_PREFILL_FUSION_ONLY)
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-
 #if defined(LIGHTOP_SPARSE_MQA_ONLY)
-  bind_paged_sparse_mqa(m);
+  lightop::mqa_bindings::bind_paged_sparse_mqa(m);
 #else
-  bind_prefill_sparse_fusion(m);
+  lightop::mqa_bindings::bind_prefill_sparse_fusion(m);
 #endif
 }
 #else
 #include <torch/extension.h>
-#include "../mqa_logits/sparse/prefill_sparse_sort.h"
-#include "../mqa_logits/sparse/prefill_sparse_fusion.h"
 #include <ATen/ATen.h>
 #include <c10/macros/Macros.h>
 #include <vector>
 #include <optional>
 
-#include "../mqa_logits/mqa_logits_api.h"
-#include "../mqa_logits/fp8_fp4/fp8_fp4_mqa_logits.h"
-#include "../mqa_logits/fp8_fp4/dsv41_mqa_prep.h"
-#include "../mqa_logits/paged/paged_mqa_logits.h"
-#include "../mqa_logits/paged/paged_mqa_logits_persisten.h"
-#include "../mqa_logits/paged/paged_mqa_logits_fp4.h"
-#include "../mqa_logits/sparse/sparse_page_mqa.h"
-#include "../mqa_logits/sparse/paged_sparse_mqa_logits_metadata.h"
-#include "../mqa_logits/sparse/paged_sparse_mqa_logits.h"
-#include "../kernels/index_k_int8_dequant/index_k_int8_dequant.h"
 #include "../lmslimquant_native/bindings.h"
 #include "../lmslimquant_native/hipblaslt/blaslt_w8a8_gemm.hpp"
 #include "../lmslimquant_native/hipblaslt/blaslt_w8a8_gemm_v2.hpp"
@@ -473,20 +398,7 @@ void ms_deform_attn_cuda_backward(const Tensor &value, const Tensor &spatial_sha
 void mha_norm_rope_qkv_inplace_cuda(at::Tensor qkv, c10::optional<at::Tensor> gamma_q, c10::optional<at::Tensor> beta_q, c10::optional<at::Tensor> gamma_k,c10::optional<at::Tensor> beta_k,at::Tensor cos, at::Tensor sin, double eps);
 void cross_norm_rope_q_kv_inplace_cuda(at::Tensor q,at::Tensor kv,  c10::optional<at::Tensor> gamma_q, c10::optional<at::Tensor> beta_q,c10::optional<at::Tensor> gamma_k,c10::optional<at::Tensor> beta_k, at::Tensor cos,  at::Tensor sin,  double eps);
 torch::Tensor box_cost(const torch::Tensor &pred, const torch::Tensor &target, const torch::Tensor &inst_weights, const torch::Tensor &dim_weights, const float cost_weight); 
-torch::Tensor encode_reg_t(const torch::Tensor &input, const torch::Tensor &lengths); 
-torch::Tensor mqa_logits(
-    torch::Tensor& Q,
-    torch::Tensor& K,
-    torch::Tensor& Weights,
-    torch::Tensor& KS,
-    torch::Tensor& KE,
-    int q_seq_len,
-    int kv_seq_len,
-    int num_heads,
-    int head_dim,
-    const torch::optional<torch::Tensor> &KV_scale =  torch::nullopt,
-    bool clean_logits = true,
-    const torch::optional<torch::Tensor> &D_out = torch::nullopt);
+torch::Tensor encode_reg_t(const torch::Tensor &input, const torch::Tensor &lengths);
 std::vector<torch::Tensor> batch_linear_assignment(torch::Tensor cost);
 void fill_zeros(Tensor &out, int bs, int hidden_size);
 void rms_rotary_embedding_fuse(Tensor &positions,Tensor &query,Tensor &key,int64_t head_size,Tensor &cos_sin_cache, bool is_neox,Tensor weight_q,Tensor weight_k,c10::optional<Tensor> residual_q,c10::optional<Tensor> residual_k,double epsilon);

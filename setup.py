@@ -57,56 +57,49 @@ def _find_rocm_home() -> Optional[str]:
     return rocm_home
 
 
-def _get_rocm_arch_flags(cflags: Optional[List[str]] = None) -> List[str]:
-    if cflags is not None:
-        for flag in cflags:
-            if 'amdgpu-target' in flag:
-                return ['-fno-gpu-rdc']
+def _resolve_rocm_archs() -> List[str]:
     dtk_ver = int(str(dtk_version)[:4])  # dtk命名问题25042和2604  取前四位比较
     if dtk_ver >= 2604:  # dtk>=26042 can support gfx938
-        #archs = os.environ.get('PYTORCH_ROCM_ARCH', 'gfx906;gfx926;gfx928;gfx936;gfx938')
         default_archs = 'gfx928;gfx936;gfx938'
         if dtk_ver >= 2610:
             default_archs += ';gfx92a'
         archs = os.environ.get('PYTORCH_ROCM_ARCH', default_archs)
     else:
         archs = os.environ.get('PYTORCH_ROCM_ARCH', 'gfx906;gfx926;gfx928;gfx936')
-    flags = ['--offload-arch=%s' % arch for arch in archs.split(';')]
-    flags += ['-fno-gpu-rdc']
-    flags +=['--gpu-max-threads-per-block=1024']
+    return [arch for arch in archs.split(';') if arch]
+
+
+def _build_rocm_arch_flags(
+    cflags: Optional[List[str]],
+    max_threads_per_block: int,
+    extra_flags: Optional[List[str]] = None,
+    skip_limits_on_amdgpu_target: bool = False,
+) -> List[str]:
+    has_amdgpu_target = cflags is not None and any('amdgpu-target' in flag for flag in cflags)
+    if has_amdgpu_target:
+        flags = ['-fno-gpu-rdc']
+        if skip_limits_on_amdgpu_target:
+            return flags
+    else:
+        flags = [f'--offload-arch={arch}' for arch in _resolve_rocm_archs()]
+        flags.append('-fno-gpu-rdc')
+    flags.append(f'--gpu-max-threads-per-block={max_threads_per_block}')
+    if extra_flags:
+        flags.extend(extra_flags)
     return flags
 
+
+def _get_rocm_arch_flags(cflags: Optional[List[str]] = None) -> List[str]:
+    return _build_rocm_arch_flags(cflags, 1024, skip_limits_on_amdgpu_target=True)
+
+
 def _get_rocm_arch_flags_marlin_w4a8(cflags: Optional[List[str]] = None) -> List[str]:
-    dtk_ver = int(str(dtk_version)[:4])
-    if dtk_ver >= 2604:  # dtk>=26042 can support gfx938
-        default_archs = 'gfx906;gfx926;gfx928;gfx936;gfx938'
-        if dtk_ver >= 2610:
-            default_archs += ';gfx92a'
-        archs = os.environ.get('PYTORCH_ROCM_ARCH', default_archs)
-    else:
-        archs = os.environ.get('PYTORCH_ROCM_ARCH', 'gfx906;gfx926;gfx928;gfx936')
-    flags = ['--offload-arch=%s' % arch for arch in archs.split(';')]
-    flags +=['--gpu-max-threads-per-block=512']
-    flags +=['-mllvm']
-    flags +=['-enable-num-vgprs-512=true']
-    # flags +=['--save-temps']
-    return flags
+    return _build_rocm_arch_flags(cflags, 512, ['-mllvm', '-enable-num-vgprs-512=true'])
+
+
 # 4 warp
 def _get_rocm_arch_flags_marlin_w4a16(cflags: Optional[List[str]] = None) -> List[str]:
-    dtk_ver = int(str(dtk_version)[:4])
-    if dtk_ver >= 2604:  # dtk>=26042 can support gfx938
-        default_archs = 'gfx906;gfx926;gfx928;gfx936;gfx938'
-        if dtk_ver >= 2610:
-            default_archs += ';gfx92a'
-        archs = os.environ.get('PYTORCH_ROCM_ARCH', default_archs)
-    else:
-        archs = os.environ.get('PYTORCH_ROCM_ARCH', 'gfx906;gfx926;gfx928;gfx936')
-    flags = ['--offload-arch=%s' % arch for arch in archs.split(';')]
-    flags +=['--gpu-max-threads-per-block=256']
-    # flags +=['-mllvm']
-    # flags +=['-enable-num-vgprs-512=true']
-    # flags +=['--save-temps']
-    return flags
+    return _build_rocm_arch_flags(cflags, 256)
 
 
 _ARCH_PROFILE_FLAG_FNS = {
@@ -598,10 +591,13 @@ def get_extensions():
         spec = MODULES[name]
         sources = module_sources[name]
         arch_profile = spec.get("arch_profile", "default")
+        module_compile_args = {k: list(v) for k, v in extra_compile_args.items()}
         if arch_profile in ("marlin_w4a16", "marlin_w4a8"):
-            module_compile_args = {'cxx': ['-O3', '-w'], 'nvcc': ['-O3', '-w']}
-        else:
-            module_compile_args = {k: list(v) for k, v in extra_compile_args.items()}
+            # Marlin profiles control VGPR and thread-block limits in _ARCH_PROFILE_FLAG_FNS.
+            module_compile_args["nvcc"] = [
+                flag for flag in module_compile_args.get("nvcc", [])
+                if flag != "-mllvm -enable-num-vgprs-512=true"
+            ]
         for compiler, flags in spec["extra_compile_args"].items():
             module_compile_args.setdefault(compiler, []).extend(flags)
         mod_ext = extension(

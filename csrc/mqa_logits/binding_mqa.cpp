@@ -21,16 +21,12 @@
 #include "paged/paged_mqa_logits.h"
 #include "paged/paged_mqa_logits_persisten.h"
 #include "paged/paged_mqa_logits_fp4.h"
+#include "sparse/bind_sparse_mqa.h"
 #include "sparse/sparse_page_mqa.h"
-#include "sparse/paged_sparse_mqa_logits_metadata.h"
-#include "sparse/paged_sparse_mqa_logits.h"
-#include "sparse/prefill_sparse_sort.h"
-#include "sparse/prefill_sparse_fusion.h"
 #include "../kernels/index_k_int8_dequant/index_k_int8_dequant.h"
 
 namespace at::native {
-// Declaration mirrored verbatim from csrc/pybind/export.cpp; defined in
-// csrc/mqa_logits/mqa_logits_asm.cu (dispatch stays inside the family).
+// Declaration mirrored verbatim from csrc/mqa_logits/mqa_logits_asm.cu.
 torch::Tensor mqa_logits(
     torch::Tensor& Q,
     torch::Tensor& K,
@@ -45,60 +41,6 @@ torch::Tensor mqa_logits(
     bool clean_logits = true,
     const torch::optional<torch::Tensor> &D_out = torch::nullopt);
 }  // namespace at::native
-
-namespace {
-// Copied verbatim from csrc/pybind/export.cpp (bind_paged_sparse_mqa).
-void bind_paged_sparse_mqa(pybind11::module_& m) {
-  namespace py = pybind11;
-#ifdef PREFILL_SPARSE_MQA_BUILD_ID
-  m.attr("PAGED_SPARSE_MQA_BUILD_ID") = PREFILL_SPARSE_MQA_BUILD_ID;
-#endif
-#ifdef PREFILL_SPARSE_MQA_CONSUMER_SHA256
-  m.attr("PAGED_SPARSE_MQA_CONSUMER_SHA256") = PREFILL_SPARSE_MQA_CONSUMER_SHA256;
-#endif
-  m.attr("PAGED_SPARSE_MQA_LOGITS_ABI") = 3;
-  m.attr("PAGED_SPARSE_MQA_METADATA_FORMAT") = "deepgemm_paged_sparse_v1";
-  m.def("fp8_fp4_paged_sparse_mqa_logits",
-        &lightop::deep_gemm::fp8_fp4_paged_sparse_mqa_logits,
-        "MXFP4/MXFP8 paged sparse logits, FP32 weights/output, Prefill/Decode dispatch",
-        py::arg("q"), py::arg("q_scales"), py::arg("fused_kv_cache"),
-        py::arg("weights"), py::arg("metadata"), py::arg("num_max_sparse_blocks"),
-        py::arg("sparse_block_kv"), py::arg("context_lens") = std::nullopt,
-        py::arg("sparse_kv_block_indices") = std::nullopt,
-        py::arg("output") = std::nullopt, py::arg("num_sms") = std::nullopt,
-        py::arg("is_prefill") = false);
-  m.attr("sparse_fp8_fp4_paged_mqa_logits") = m.attr("fp8_fp4_paged_sparse_mqa_logits");
-  m.def("get_paged_sparse_mqa_logits_metadata",
-        &lightop::deep_gemm::get_paged_sparse_mqa_logits_metadata,
-        "DeepGEMM get_paged_sparse_mqa_logits_metadata: merged sparse KV splits and persistent schedule",
-        py::arg("context_lens"), py::arg("block_table"), py::arg("indices"),
-        py::arg("page_kv"), py::arg("sparse_kv_block_indices"), py::arg("qk_dtype"),
-        py::arg("sparse_block_kv"), py::arg("num_sms") = std::nullopt);
-  m.def("get_paged_sparse_mqa_logits_metadata_bytes",
-        &lightop::deep_gemm::get_paged_sparse_mqa_logits_metadata_bytes,
-        "Size of get_paged_sparse_mqa_logits_metadata's output",
-        py::arg("num_q_tokens"), py::arg("num_max_sparse_blocks"),
-        py::arg("sparse_block_kv"), py::arg("split_kv"), py::arg("num_sms"));
-    m.def("prefill_sparse_fp8_fp4_paged_mqa_logits", &lightop::deep_gemm::prefill_sparse_fp8_fp4_paged_mqa_logits,
-        py::arg("q"),py::arg("scales"),py::arg("kv"),py::arg("weights"),py::arg("lens"),py::arg("table"),
-        py::arg("indices"),py::arg("candidates"),py::arg("capacity"),py::arg("block"),py::arg("num_sms")=std::nullopt,
-        py::arg("paired_rows")=false,py::arg("threads")=0);
-}
-
-// Definitions live in sparse/prefill_sparse_fusion.cu and sparse/prefill_sparse_sort.cu.
-void bind_prefill_sparse_fusion(pybind11::module_& m) {
-#ifdef PREFILL_FUSION_BUILD_ID
-  m.attr("PREFILL_SPARSE_FUSION_BUILD_ID") = PREFILL_FUSION_BUILD_ID;
-#endif
-  m.attr("PREFILL_SPARSE_SORT_ABI") = 1;
-  m.attr("PREFILL_SPARSE_FUSION_ABI")=1;
-  m.def("prefill_sparse_native_prepare_query", &prefill_sparse_native_prepare_query);
-  m.def("prefill_sparse_native_prepare_candidates", &prefill_sparse_native_prepare_candidates);
-  m.def("prefill_sparse_native_finalize", &prefill_sparse_native_finalize);
-  m.def("prefill_sparse_sort_candidates", &prefill_sparse_sort_candidates);
-  m.def("prefill_sparse_finalize_indices", &prefill_sparse_finalize_indices);
-}
-}  // namespace
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.doc() = "LightOp MQA logits operators";
@@ -177,8 +119,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "FP4 paged MQA split-KV schedule planner",
         py::arg("context_lens"), py::arg("block_kv"), py::arg("num_sms"),
         py::arg("rows_per_request") = 1);
-  // --- verbatim from csrc/pybind/export.cpp (sparse paged MQA group) ---
-  bind_paged_sparse_mqa(m);
+  // --- shared sparse paged MQA group ---
+  lightop::mqa_bindings::bind_paged_sparse_mqa(m);
   // --- verbatim from csrc/pybind/export.cpp (defined in paged_mqa_logits/) ---
   m.def("dsv41_candidate_block_table", &lightop::deep_gemm::dsv41_candidate_block_table,
         "DSV4.1 candidate indexer level one: top blocks of 8 by block max as pool slots / 8",
@@ -248,6 +190,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       py::arg("num_warps") = 4,
       py::arg("persistent_ctas") = 0,
       py::arg("group_size") = 5);
-  // --- verbatim from csrc/pybind/export.cpp (prefill sparse fusion group) ---
-  bind_prefill_sparse_fusion(m);
+  // --- shared prefill sparse fusion group ---
+  lightop::mqa_bindings::bind_prefill_sparse_fusion(m);
 }
