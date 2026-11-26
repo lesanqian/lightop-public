@@ -186,5 +186,42 @@ def test_per_token_group_quant_fp8(num_tokens):
     run_case(num_tokens)
 
 
+@pytest.mark.parametrize("input_dtype", [torch.bfloat16, torch.float16, torch.float32])
+@pytest.mark.parametrize("fp8_dtype", [torch.float8_e4m3fn, torch.float8_e5m2])
+@pytest.mark.parametrize("group_size", [16, 128, 512, 1024])
+@pytest.mark.parametrize("use_ue8m0", [False, True])
+def test_per_token_group_quant_fp8_ue8m0_and_dtypes(
+    input_dtype, fp8_dtype, group_size, use_ue8m0
+):
+    if not torch.cuda.is_available():
+        pytest.skip("需要 CUDA/ROCm 设备")
+    torch.manual_seed(946)
+    num_tokens = 32
+    hidden = max(group_size * 2, 256)
+    x = torch.randn((num_tokens, hidden), dtype=input_dtype, device="cuda") * 3.0
+    x[0].zero_()
+    x[1, :group_size] = 1e-7
+    eps = 1e-10
+
+    q, s = per_token_group_quant_fp8(
+        x, group_size=group_size, eps=eps, dtype=fp8_dtype, use_ue8m0=use_ue8m0
+    )
+    torch.cuda.synchronize()
+
+    fp8_max = 448.0 if fp8_dtype == torch.float8_e4m3fn else 57344.0
+    x_f32 = x.float().view(num_tokens, -1, group_size)
+    absmax = torch.clamp(x_f32.abs().amax(dim=-1), min=eps)
+    scale_raw = absmax / fp8_max
+    ref_s = torch.exp2(torch.ceil(torch.log2(scale_raw))) if use_ue8m0 else scale_raw
+    ref_q = torch.clamp(x_f32 / ref_s.unsqueeze(-1), -fp8_max, fp8_max).to(fp8_dtype).view_as(x)
+
+    torch.testing.assert_close(s, ref_s, rtol=1e-5, atol=1e-7)
+    if use_ue8m0:
+        bits = s.view(torch.int32)
+        assert torch.all((bits & 0x7FFFFF) == 0), "UE8M0 scales must be exact powers of 2"
+    q_diff = (q.view(torch.int8).float() - ref_q.view(torch.int8).float()).abs().max().item()
+    assert q_diff <= 1.0, f"FP8 max ULP diff {q_diff} > 1"
+
+
 if __name__ == "__main__":
     benchmark_and_verify()

@@ -410,6 +410,7 @@ Tensor gemm_w8_a8_smooth_colmajor(const Tensor& x,const Tensor& y,const Tensor& 
 
 Tensor gemm_w8a8_smooth_asm(Tensor &A, Tensor &B, Tensor &As, Tensor &Bs, const std::optional<Tensor> bias, torch::Dtype output_dtype, int M, int N, int K, bool isTunning_slide_block, int tunning_slide_block);
 Tensor gemm_w8a8_asm(Tensor &A, Tensor &B, Tensor &As, Tensor &Bs, c10::optional<Tensor> &C, c10::optional<Tensor> &D_, c10::optional<Tensor> bias, torch::Dtype output_dtype, int M, int N, int K, int gradType = 0);
+Tensor fp8_blockwise_gemm_ue8m0_gfx946(const Tensor& a, const Tensor& b, const Tensor& scale_a, const Tensor& scale_b, at::ScalarType out_dtype, int64_t m, int64_t n, int64_t k, int64_t batch, const std::string& transpose_flag, int block_size, const c10::optional<Tensor>& bias);
 
 std::vector<torch::Tensor> grougemm_w8a8_pertensor_asm(std::vector<torch::Tensor>& A_list, std::vector<torch::Tensor>& B_list, std::vector<torch::Tensor>& D_list, std::vector<torch::Tensor>& As_list, std::vector<torch::Tensor>& Bs_list, 
                                                       std::vector<float>& alphas, c10::optional<std::vector<torch::Tensor>>& C_list, c10::optional<std::vector<float>>& betas, torch::Dtype output_dtype);
@@ -1356,6 +1357,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("store_kv_cache_paged", &at::native::store_kv_cache_paged, "store_kv_cache_paged");
   m.def("topk_softmax", &at::native::topk_softmax, "topk_softmax");
   m.def("gemm_w8a8_asm", &at::native::gemm_w8a8_asm, "gemm_w8a8_block_asm");
+  m.def("fp8_blockwise_gemm_ue8m0_gfx946", &at::native::fp8_blockwise_gemm_ue8m0_gfx946, "fp8_blockwise_gemm_ue8m0_gfx946");
   m.def("moe_w8a8_asm", &at::native::moe_w8a8_asm, "moe_w8a8_asm");
   m.def("moe_marlin_w8a8_asm", &at::native::moe_marlin_w8a8_asm, "moe_marlin_w8a8_asm");
   m.def("moe_marlin_w8a8_fp8_asm", &at::native::moe_marlin_w8a8_fp8_asm, "moe_marlin_w8a8_fp8_asm");
