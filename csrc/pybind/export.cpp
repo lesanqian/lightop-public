@@ -4,8 +4,6 @@
 #include <torch/extension.h>
 
 namespace at::native {
-torch::Tensor minimax_cp_fp8_pack(torch::Tensor,torch::Tensor,torch::Tensor,double,double,bool,bool);
-void minimax_cp_cache_scatter(torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor);
 std::vector<torch::Tensor> minimax_qk_norm_rope(torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor,torch::Tensor,double,int64_t,bool,int64_t);
 }
 
@@ -117,86 +115,21 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 #include <vector>
 #include <optional>
 
-#include "../lmslimquant_native/bindings.h"
-#include "../lmslimquant_native/hipblaslt/blaslt_w8a8_gemm.hpp"
-#include "../lmslimquant_native/hipblaslt/blaslt_w8a8_gemm_v2.hpp"
-#include "../kernels/sampling/sampling.h"
-#include "../kernels/sampling/markov_gemv_argmax.h"
 namespace lightop::cp_output {
 void interleave_rows_(at::Tensor, int64_t, const at::Tensor&);
 void make_interleave_plan_(at::Tensor, int64_t, int64_t);
 }
 
-enum GRAD_TYPE {nograd, wgrad, xgrad};
-namespace lightop::dsv41 {
-void fill_swa_ring_mapping(torch::Tensor mapping, const torch::Tensor& requests,
-    const torch::Tensor& prefixes, const torch::Tensor& table,
-    const c10::optional<torch::Tensor>& positions,
-    const c10::optional<torch::Tensor>& locations,
-    int64_t window, int64_t ring, int64_t block);
-void ragged_topk_postprocess(const torch::Tensor& scores, const torch::Tensor& selected,
-    const torch::Tensor& offsets, const torch::Tensor& slots, torch::Tensor& pages,
-    const c10::optional<torch::Tensor>& raw, bool mask_scores);
-torch::Tensor remap_indices_to_staging(const torch::Tensor& indices,
-    const torch::Tensor& pages, int64_t page_size, int64_t max_pages, bool static_pages);
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> build_swa_token_ids(
-    const torch::Tensor& seq, const torch::Tensor& extend, const torch::Tensor& req,
-    const torch::Tensor& table, const torch::Tensor& full_to_swa, int64_t window, int64_t total);
-std::tuple<torch::Tensor, torch::Tensor> pair_partners(
-    const torch::Tensor& kv, const torch::Tensor& score,
-    const torch::Tensor& req, const torch::Tensor& pos, const torch::Tensor& pad,
-    torch::Tensor& state, int64_t ring);
-}
 namespace at {  namespace native {
 // Spark MLA Q/K RoPE, Q concatenation and FP8 cache write in one kernel.
-void spark_mla_rope_cat_store(
-    const torch::Tensor& positions, const torch::Tensor& query_nope,
-    const torch::Tensor& query_rope, const torch::Tensor& key_nope,
-    const torch::Tensor& key_rope, const torch::Tensor& cosine_sine,
-    const torch::Tensor& locations, torch::Tensor query_out,
-    torch::Tensor key_rope_out, torch::Tensor cache, bool neox,
-    double quant_epsilon, int64_t heads_per_block);
 // Q-only DSA Indexer preparation; the K/cache path remains independent.
-void indexer_k_norm_rope_hadamard_store(
-    const torch::Tensor &key, const torch::Tensor &weight,
-    const c10::optional<torch::Tensor> &bias, const torch::Tensor &positions,
-    const torch::Tensor &cos_sin, const torch::Tensor &locations,
-    torch::Tensor remote_cache, torch::Tensor owner_cache, bool neox,
-    double norm_epsilon, double hadamard_scale, double quant_epsilon);
-
-std::tuple<torch::Tensor, torch::Tensor> indexer_q_rope_hadamard_quant(
-    const torch::Tensor& query, const torch::Tensor& positions,
-    const torch::Tensor& cos_sin, const torch::Tensor& raw_gate, bool neox,
-    double hadamard_scale, double head_scale, double softmax_scale);
 
 // Native MLA Q-absorb with BF16 Q RoPE and direct Q concatenation.
-torch::Tensor mla_q_absorb_rope_concat(
-    torch::Tensor x, torch::Tensor weight, torch::Tensor q_rope,
-    torch::Tensor positions, torch::Tensor cos_sin, bool is_neox
-);
 
 std::optional<Tensor> hc_mix_stats(const Tensor& x, const Tensor& w, double eps);
 std::tuple<Tensor, Tensor, Tensor> hc_mix_stats_sinkhorn_bf16x3(const Tensor&, const std::vector<Tensor>&, const Tensor&, const Tensor&, int64_t, double, double, int64_t);
 std::tuple<Tensor, Tensor, Tensor> hc_mix_stats_sinkhorn_deepgemm(const Tensor&, const std::vector<Tensor>&, const Tensor&, const Tensor&, int64_t, double, double, int64_t);
-void fused_dsa_cp_prefill_metadata_launcher(
-    const torch::Tensor&, const torch::Tensor&, const torch::Tensor&,
-    const torch::Tensor&, const std::vector<torch::Tensor>&,
-    int64_t, int64_t, int64_t, int64_t);
 
-void fused_metadata_kernel_general_launcher(
-    Tensor seq_lens,
-    Tensor req_to_token,
-    Tensor req_pool_indices,
-    Tensor cache_seqlens_int32,
-    Tensor cu_seqlens_k,
-    Tensor page_table,
-    const c10::optional<Tensor>& swa_page_table,
-    const c10::optional<Tensor>& full_to_swa_mapping,
-    int64_t B,
-    int64_t max_seq_pages,
-    int64_t page_size,
-    int64_t seq_len_delta,
-    bool    use_swa);
 Tensor rmsnorm_forward_autograd(const Tensor& x,const Tensor& weight,double eps,bool training);
 std::tuple<Tensor,Tensor>rmsnorm_forward(const Tensor& self,const Tensor& weight,c10::optional<Tensor>& output_inplace,double eps,bool training);
 std::tuple<Tensor,Tensor>rmsnorm_backward(const Tensor& grad, const Tensor& X,const Tensor& rstd,const Tensor& gamma);
@@ -306,8 +239,6 @@ Tensor fuse_scaled_masked_softmax_forward_autograd(torch::Tensor const& input, t
 int get_batch_per_block(int query_seq_len, int key_seq_len, int batches, int attn_heads);
 Tensor fuse_scaled_upper_triang_masked_softmax_dropout_forward_autograd(torch::Tensor const& input, float scale_factor, float p);
 Tensor fuse_scaled_masked_softmax_dropout_forward_autograd(torch::Tensor const& input, torch::Tensor const& mask, float scale_factor, double p);
-Tensor RoPE_forward_gpu(int sq, int b, int np, int hn, Tensor tensor_q,Tensor tensor_cos, Tensor tensor_sin);
-Tensor RoPE_backward_gpu(int sq, int b, int np, int hn,Tensor tensor_grad_out, Tensor tensor_cos, Tensor tensor_sin);
 Tensor FusedBiasSwiGLU_forward_gpu(Tensor in, Tensor bias);
 std::vector<Tensor> FusedBiasSwiGLU_backward_gpu(Tensor out_grad,Tensor in,Tensor bias);
 std::tuple <Tensor, Tensor> fuse_bias_dropout_add_forward(const Tensor &x,const Tensor &bias,const Tensor &residual,double droprate,bool training);
@@ -315,49 +246,14 @@ std::tuple <Tensor, Tensor> fuse_bias_dropout_add_backward(const Tensor &grad,co
 Tensor fused_bmm(torch::Tensor x, torch::Tensor w, torch::Tensor output, torch::Tensor x_scale, torch::Tensor w_scale, std::optional<torch::Tensor> bias, torch::Dtype dtype, bool transpose_bm, bool transpose_bm_in, int mode);
 Tensor sum_opt(const Tensor& x,int dim);
 Tensor mean_opt(const Tensor& x,int dim);
-std::tuple<Tensor,Tensor> topk_opt(const Tensor& x,int k,int dim,bool sorted);
 Tensor gemm_opt(const Tensor& x,const Tensor& y, c10::optional<at::ScalarType> out_dtype);
 Tensor gemm_w4_a16(const Tensor& x,const Tensor& y,const Tensor& scale_m,const Tensor& zero_m);
-void gemm_awq_w4a16(Tensor& ret,const Tensor& x,const Tensor& y,const Tensor& scales_zeros,int num_n_warps, int num_k_warps, int n_per_warp,int k_per_warp,int splitk,bool use_marlin);
-void gemm_awq_w4a16_dequant(Tensor& ret,const Tensor& weight,const Tensor& scales_zeros,bool use_marlin);
 Tensor w4_to_w16(const Tensor& x,const Tensor& scale_m,const Tensor& zero_m);
 Tensor gemm_w8_a16_fp8_colmajor(const Tensor& x,const Tensor& y,const Tensor& scale,int warps,int n_per_block,int splitk);
 void fp8to16(Tensor &ret, const Tensor &x,const Tensor& scale);
 Tensor gemm_w8_a8_smooth_colmajor(const Tensor& x,const Tensor& y,const Tensor& scale_a,const Tensor& scale_b,  const std::optional<Tensor> bias, at::ScalarType out_dtype,int warps,int n_per_block, int n_per_warp, int splitk, bool use_n_warps);
 
-Tensor gemm_w8a8_smooth_asm(Tensor &A, Tensor &B, Tensor &As, Tensor &Bs, const std::optional<Tensor> bias, torch::Dtype output_dtype, int M, int N, int K, bool isTunning_slide_block, int tunning_slide_block, bool input_scale_first);
-Tensor gemm_w8a8_asm(Tensor &A, Tensor &B, Tensor &As, Tensor &Bs, c10::optional<Tensor> &C, c10::optional<Tensor> &D_, c10::optional<Tensor> bias, torch::Dtype output_dtype, int M, int N, int K, int gradType = 0);
-
-std::vector<torch::Tensor> grougemm_w8a8_pertensor_asm(std::vector<torch::Tensor>& A_list, std::vector<torch::Tensor>& B_list, std::vector<torch::Tensor>& D_list, std::vector<torch::Tensor>& As_list, std::vector<torch::Tensor>& Bs_list, 
-                                                      std::vector<float>& alphas, c10::optional<std::vector<torch::Tensor>>& C_list, c10::optional<std::vector<float>>& betas, torch::Dtype output_dtype);
-std::vector<torch::Tensor> grougemm_bf16_fp16_nt_asm(std::vector<torch::Tensor>& A_list, std::vector<torch::Tensor>& B_list, std::vector<torch::Tensor>& D_list, 
-                                                      std::vector<float>& alphas, c10::optional<std::vector<torch::Tensor>>& C_list, c10::optional<std::vector<float>>& betas, torch::Dtype output_dtype);
-std::vector<torch::Tensor> grougemm_bf16_fp16_tn_asm(std::vector<torch::Tensor>& A_list, std::vector<torch::Tensor>& B_list, std::vector<torch::Tensor>& D_list, 
-                                                      std::vector<float>& alphas, c10::optional<std::vector<torch::Tensor>>& C_list, c10::optional<std::vector<float>>& betas, torch::Dtype output_dtype);
-std::vector<torch::Tensor> grougemm_bf16_fp16_nn_asm(std::vector<torch::Tensor>& A_list, std::vector<torch::Tensor>& B_list, std::vector<torch::Tensor>& D_list, 
-                                                      std::vector<float>& alphas, c10::optional<std::vector<torch::Tensor>>& C_list, c10::optional<std::vector<float>>& betas, torch::Dtype output_dtype);
-Tensor m_grouped_w8a8_gemm_nt_contig_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, Tensor m_indices, int mode);
-Tensor m_grouped_w16a16_gemm_nt_contig_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, Tensor m_indices, int mode);
-Tensor m_grouped_w8a8_gemm_nt_nopad_contig_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, Tensor m_indices, Tensor token_per_expert);
-
-Tensor moe_w8a8_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, std::optional<Tensor> topk_weights, Tensor sorted_token_ids, Tensor expert_ids, Tensor num_tokens_post_pad, uint32_t top_k, int mode, int delta);
-Tensor moe_marlin_w8a8_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, std::optional<Tensor> topk_weights, Tensor sorted_token_ids, Tensor expert_ids, Tensor num_tokens_post_pad, uint32_t top_k, int mode, int delta);
-Tensor moe_marlin_w8a8_fp8_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, std::optional<Tensor> topk_weights, Tensor sorted_token_ids, Tensor expert_ids, Tensor num_tokens_post_pad, uint32_t top_k, int mode, int delta);
-Tensor moe_w4a8_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, std::optional<Tensor> topk_weights, Tensor sorted_token_ids, Tensor expert_ids, Tensor num_tokens_post_pad, uint32_t top_k, int mode);
-Tensor moe_w4a8_marlin_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, std::optional<Tensor> topk_weights, Tensor sorted_token_ids, Tensor expert_ids, Tensor num_tokens_post_pad, uint32_t top_k, int mode);
-Tensor moe_groupgemm_w4a8_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, Tensor problem_size, Tensor expert_offsets, int mode);
-Tensor moe_groupgemm_marlin_w4a8_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, Tensor problem_size, Tensor expert_offsets, int mode);
-Tensor m_grouped_marlin_w4a8_gemm_nt_masked_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, Tensor masked_m, int expected_m_per_group, int mode);
-Tensor m_grouped_marlin_w8a8_gemm_nt_masked_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, Tensor masked_m, int expected_m_per_group, int mode);
-Tensor m_grouped_marlin_fp8_gemm_nt_masked_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor a_scale, Tensor b_scale, Tensor masked_m, int expected_m_per_group, int mode);
-Tensor m_grouped_bf16_gemm_nt_masked_asm(Tensor input, Tensor b_qweight, Tensor output, Tensor masked_m, int expected_m_per_group, int mode);
-Tensor moe_w16a16_asm(Tensor input,Tensor b_qweight,Tensor output,std::optional<Tensor> topk_weights,Tensor sorted_token_ids,Tensor expert_ids,Tensor num_tokens_post_pad, int top_k, int mode, int delta);
-Tensor moe_marlin_w16a16_asm(Tensor input,Tensor b_qweight,Tensor output,std::optional<Tensor> topk_weights,Tensor sorted_token_ids,Tensor expert_ids,Tensor num_tokens_post_pad, int top_k, int mode, int delta);
 Tensor ds_concat(torch::Tensor input_A, torch::Tensor input_B, torch::Tensor output, int32_t mode);
-void blockwise_scaled_cast_transpose(const Tensor& input,std::optional<Tensor> output,std::optional<Tensor> scale_inv,
-                                    std::optional<Tensor> output_t,std::optional<Tensor> scale_inv_t,std::optional<Tensor> noop,
-                                    const int block_len,const int block_scaling_dim,const bool rowwise,const bool columnwise,
-                                    const float epsilon,const bool pow2_scale,const bool all_gather_usage, at::ScalarType out_dtype);
 
 void rms_norm_dynamic_per_token_quant(Tensor &output,Tensor& input,const Tensor& weight,Tensor scales,double epsilon,std::optional<Tensor> residual,bool update_input,double limit);
 void rms_norm_dynamic_per_token_quant_sglang(Tensor &output,Tensor& input,const Tensor& weight,Tensor scales,double epsilon,std::optional<Tensor> residual,bool update_input,double limit,std::optional<Tensor> smooth_scale,std::optional<Tensor> norm_output,bool clamp_norm_output,std::optional<Tensor> residual_output,std::optional<Tensor> clamped_output);
@@ -368,17 +264,10 @@ void create_gemmbias_handle();
 void destroy_gemmbias_handle();
 void create_gemmdbias_handle();
 void destroy_gemmdbias_handle();
-void store_kv_cache(torch::Tensor packed_qkv,torch::Tensor& K_cache,torch::Tensor& V_cache,torch::Tensor q_lens,torch::Tensor accum_q_lens,
-                              torch::Tensor cache_lens,torch::Tensor cache_slot_ids,torch::Tensor k_scale,torch::Tensor v_scale,const std::string& kv_cache_dtype_str,int q_head_num,int kv_head_num);
-void store_kv_cache_paged(const torch::Tensor& key, const torch::Tensor& value,torch::Tensor& K_cache, torch::Tensor& V_cache,const torch::Tensor& q_lens, const torch::Tensor& accum_q_lens,
-                          const torch::Tensor& cache_lens, const torch::Tensor& block_table,const torch::Tensor& k_scale, const torch::Tensor& v_scale,const std::string& kv_cache_dtype_str);
 
 void topk_softmax(torch::Tensor& topk_weights, torch::Tensor& topk_indices,torch::optional<torch::Tensor>& token_expert_indices,torch::Tensor& gating_output,  bool Is_renormalize = false);
-void rotary_embedding_fuse(torch::Tensor& positions,  torch::Tensor& query, std::optional<torch::Tensor> key,int64_t head_size,torch::Tensor& cos_sin_cache, bool is_neox);    
-void rotary_embedding_deepseek_fuse(torch::Tensor& positions,  torch::Tensor& query, std::optional<torch::Tensor> key,int64_t head_size,torch::Tensor& cos_sin_cache, bool is_neox, std::optional<torch::Tensor> offsets, bool round_bf16_products, std::optional<torch::Tensor> query_out, std::optional<torch::Tensor> key_out);
 
 //------------------------------------------------- groupgemm ---------------------------------------//
-Tensor groupgemm(Tensor &a, Tensor &b, Tensor &batch_sizes, bool trans_b);
 //------------------------------------------------- groupgemm ---------------------------------------//
 
 void fuse_silu_mul_quant(torch::Tensor& input, torch::Tensor& output, torch::Tensor& scales, torch::optional<torch::Tensor> &num_local_tokens_tensor, int topK, int expert_m, torch::optional<torch::Tensor> &expert_ids) ;
@@ -395,35 +284,17 @@ void fuse_silu_and_mul(torch::Tensor& input, torch::Tensor& out);
 void fuse_silu_and_mul_ep(torch::Tensor& input, torch::Tensor& out, const torch::Tensor& mask_m, int expect_m);
 Tensor ms_deform_attn_cuda_forward(const Tensor &value, const Tensor &spatial_shapes, const Tensor &level_start_index, const Tensor &sampling_loc, const Tensor &attn_weight, const int im2col_step);
 void ms_deform_attn_cuda_backward(const Tensor &value, const Tensor &spatial_shapes, const Tensor &level_start_index, const Tensor &sampling_loc, const Tensor &attn_weight, const Tensor &grad_output, Tensor &grad_value, Tensor &grad_sampling_loc, Tensor &grad_attn_weight, const int im2col_step);
-void mha_norm_rope_qkv_inplace_cuda(at::Tensor qkv, c10::optional<at::Tensor> gamma_q, c10::optional<at::Tensor> beta_q, c10::optional<at::Tensor> gamma_k,c10::optional<at::Tensor> beta_k,at::Tensor cos, at::Tensor sin, double eps);
-void cross_norm_rope_q_kv_inplace_cuda(at::Tensor q,at::Tensor kv,  c10::optional<at::Tensor> gamma_q, c10::optional<at::Tensor> beta_q,c10::optional<at::Tensor> gamma_k,c10::optional<at::Tensor> beta_k, at::Tensor cos,  at::Tensor sin,  double eps);
 torch::Tensor box_cost(const torch::Tensor &pred, const torch::Tensor &target, const torch::Tensor &inst_weights, const torch::Tensor &dim_weights, const float cost_weight); 
 torch::Tensor encode_reg_t(const torch::Tensor &input, const torch::Tensor &lengths);
 std::vector<torch::Tensor> batch_linear_assignment(torch::Tensor cost);
 void fill_zeros(Tensor &out, int bs, int hidden_size);
 void rms_rotary_embedding_fuse(Tensor &positions,Tensor &query,Tensor &key,int64_t head_size,Tensor &cos_sin_cache, bool is_neox,Tensor weight_q,Tensor weight_k,c10::optional<Tensor> residual_q,c10::optional<Tensor> residual_k,double epsilon);
-void reshape_and_cache_cuda(torch::Tensor& key,torch::Tensor& value, torch::Tensor& key_cache, torch::Tensor& value_cache, torch::Tensor& slot_mapping, const std::string& kv_cache_dtype, torch::Tensor& k_scale, torch::Tensor& v_scale);
 
-void destindex_copy_quantize_int8_cuda(const torch::Tensor& input, torch::Tensor& scale_zero, torch::Tensor& output);
-void destindex_dequantize_int8_cuda(const torch::Tensor& input, const torch::Tensor& scale_zero, torch::Tensor& output);
 void fuse_rms_mrope_cuda(Tensor &q, Tensor &k, const Tensor &cos, const Tensor &sin, const std::vector<int>& mrope_section, int head_size, int rotary_dim,bool is_interleaved,Tensor weight_q,Tensor weight_k,c10::optional<Tensor> residual_q,c10::optional<Tensor> residual_k,double epsilon);
 torch::Tensor backward_polyfill_cuda(torch::Tensor vertices,torch::Tensor output,torch::Tensor nearest_edge_map,torch::Tensor grad_output,torch::Tensor grad_vertices,int width,int height,float inv_smoothness,int mode);
 std::vector<torch::Tensor> forward_polyfill_cuda(torch::Tensor vertices,torch::Tensor output,torch::Tensor nearest_edge_map,int width,int height,float inv_smoothness,int mode);
 torch::Tensor backward_polyfill_lightop(torch::Tensor vertices,torch::Tensor output,torch::Tensor nearest_edge_map,torch::Tensor grad_output,torch::Tensor grad_vertices,int width,int height,float inv_smoothness,int mode);
 std::vector<torch::Tensor> forward_polyfill_lightop(torch::Tensor vertices,torch::Tensor output,torch::Tensor nearest_edge_map,int width,int height,float inv_smoothness,int mode);
-void per_token_dynamic_quant_int8(torch::Tensor& out, torch::Tensor const& input, torch::Tensor& scales, torch::Tensor const& smoothscale, bool round_after_smooth, double limit);
-void per_token_quant_int8_minimax_out(torch::Tensor&, const torch::Tensor&, torch::Tensor&, int64_t);
-void rope_per_token_quant_out(const torch::Tensor &, const torch::Tensor &,
-                              const torch::Tensor &, torch::Tensor &,
-                              torch::Tensor &, int64_t, int64_t, bool,
-                              int64_t, bool);
-void scale_per_token_quant_int8_out(
-    const torch::Tensor &, const torch::Tensor &, const torch::Tensor &,
-    std::optional<torch::Tensor>, torch::Tensor &, torch::Tensor &,
-    at::ScalarType, bool, int64_t, int64_t);
-void per_token_quant_int8_out(torch::Tensor& out, const torch::Tensor& input, torch::Tensor& scales,
-    const c10::optional<torch::Tensor>& smooth, const c10::optional<torch::Tensor>& weights,
-    const c10::optional<torch::Tensor>& gate_output);
 void rms_norm_opt(torch::Tensor& out,torch::Tensor& input,torch::Tensor& weight,double epsilon,double limit);
 void rms_norm_no_weight(
     torch::optional<torch::Tensor> out,
@@ -442,56 +313,10 @@ std::tuple<torch::Tensor, torch::Tensor> pack_padded_sequence_custom(
     const torch::Tensor& input,
     const torch::Tensor& lengths,
     bool batch_first);
-torch::Tensor fake_quantize_per_tensor_affine_custom(
-    const torch::Tensor& input,
-    float scale,
-    int64_t zero_point,
-    int64_t quant_min,
-    int64_t quant_max);
-torch::Tensor fake_quantize_per_channel_affine_custom(
-    const torch::Tensor& input,
-    const torch::Tensor& scale,
-    const torch::Tensor& zero_point,
-    int64_t axis,
-    int64_t quant_min,
-    int64_t quant_max);
-torch::Tensor awq_w4a16_dequant_trans(
-    torch::Tensor _weight, 
-    torch::Tensor _scaling_factors, 
-    torch::Tensor _zeros, 
-    int IC, 
-    int OC, 
-    int group_size);
 //------------------------------------------------- bilinear_upsample ---------------------------------------//
 torch::Tensor bilinear_upsample(const torch::Tensor& x, const std::vector<int64_t>& output_size);
 torch::Tensor bilinear_upsample_backward(const torch::Tensor& grad_output, const std::vector<int64_t>& input_size);
 //------------------------------------------------- bilinear_upsample ---------------------------------------//
-std::vector<torch::Tensor> ds_fused_qkv_cast_fp8(
-  torch::Tensor q,
-  torch::Tensor kv_nope, 
-  torch::Tensor k_pe,   
-  int64_t qk_nope_head_dim, 
-  int64_t v_head_dim
-);
-void gather_convert_fp8_cache(
-    torch::Tensor const& src_cache,    
-    torch::Tensor const& dst,          
-    torch::Tensor const& block_table,  
-    torch::Tensor const& cu_seq_lens,  
-    int64_t batch_size,
-    double scale,                      
-    const std::string& kv_cache_dtype, 
-std::optional<torch::Tensor> seq_starts = std::nullopt);
-void gather_and_maybe_dequant_cache(
-    const torch::Tensor& src_cache,
-    const torch::Tensor& dst,
-    const torch::Tensor& block_table,
-    const torch::Tensor& cu_seq_lens,
-    const torch::Tensor& token_to_seq,
-    int64_t num_tokens,
-    const std::string& kv_cache_dtype,
-    const torch::Tensor& scale,
-    std::optional<torch::Tensor> seq_starts);
 void fused_rms_norm_rope_int8quant_contiguous(
     torch::Tensor& positions, 
     torch::Tensor& q_pe, 
@@ -508,10 +333,6 @@ void fused_rms_norm_rope_int8quant_contiguous(
     float kv_cache_scale, 
     bool is_neox_style, 
     float epsilon);
-void per_token_quant_fp8(
-    torch::Tensor& out,          // [..., hidden_size]
-    torch::Tensor const& input,  // [..., hidden_size]
-    torch::Tensor& scales, int64_t quant_ndim, int64_t threads);
 void rms_norm_smooth_per_token_dynamic_quant(
   Tensor &out,            
   Tensor& input,                
@@ -534,31 +355,6 @@ void swiglu_oai_int8_quant_masked_flat_tables(const torch::Tensor&,torch::Tensor
 void swiglu_oai_int8_quant_contiguous(const torch::Tensor&, torch::Tensor&, torch::Tensor&, double, double, double);
 void swiglu_oai_int8_quant_masked(const torch::Tensor&, torch::Tensor&, torch::Tensor&, const torch::Tensor&, double, double, double);
 std::vector<torch::Tensor> swiglu_oai_fp8_quant_contiguous(const torch::Tensor& input, double alpha, double beta, double limit);
-void per_token_group_quant_fp8(
-    torch::Tensor& out,        
-    torch::Tensor  input, 
-    torch::Tensor& scales,
-    int group_size,            
-    float eps = 1e-5f,         
-    bool use_ue8m0 = false);    
-void top_k_per_row_prefill(const torch::Tensor& logits,
-        const torch::Tensor& rowStarts,
-        const torch::Tensor& rowEnds, torch::Tensor& indices,
-        int64_t numRows, int64_t stride0, int64_t stride1,
-        int64_t topK);
-void top_k_per_row_decode(const torch::Tensor& logits, int64_t next_n,
-        const torch::Tensor& seqLens, torch::Tensor& indices,
-        int64_t numRows, int64_t stride0, int64_t stride1,
-        int64_t topK); 
-torch::Tensor convert_req_index_to_global_index(
-    torch::Tensor req_id,
-    torch::Tensor block_table,
-    torch::Tensor token_indices,
-    int BLOCK_SIZE,
-    int NUM_TOPK_TOKENS,
-    bool HAS_PREFILL_WORKSPACE,
-    std::optional<torch::Tensor> prefill_workspace_request_ids,
-    std::optional<torch::Tensor> prefill_workspace_starts);
 void fuse_qkv_head_rms_norm(
     torch::Tensor& token_data,   
     torch::Tensor& q_weight,     
@@ -573,167 +369,12 @@ void gemma_rms_norm_fp8_quant(
   Tensor &out, Tensor& input, const Tensor& weight, Tensor scales, 
   double epsilon, std::optional<Tensor> residual, bool update_input, int fp8type
 );  
-void cp_gather_and_upconvert_fp8_kv_cache(
-    torch::Tensor const& src_cache,         // [NUM_BLOCKS, BLOCK_SIZE, 656]
-    torch::Tensor const& dst,               // [TOT_TOKENS, 576]
-    torch::Tensor const& block_table,       // [BATCH, BLOCK_INDICES]
-    torch::Tensor const& seq_lens,          // [BATCH]
-    torch::Tensor const& workspace_starts,  // [BATCH]
-    int64_t batch_size); 
-void prefill_gather_and_upconvert_fp8_kv_cache(
-    torch::Tensor const& src_cache,
-    torch::Tensor const& page_table_flat,
-    torch::Tensor const& kv_dst);
-void decode_gather_and_up_convert(
-    torch::Tensor const& src_cache,
-    torch::Tensor const& token_ids,
-    torch::Tensor const& dst,
-    torch::Tensor const& valid_lengths);
-void decode_gather_and_up_convert_with_indices(
-    torch::Tensor const& src_cache,
-    torch::Tensor const& token_ids,
-    torch::Tensor const& dst,
-    torch::Tensor const& valid_lengths,
-    torch::Tensor const& compact_indices,
-    int64_t tokens_per_request,
-    std::optional<torch::Tensor> dedup_table,
-    bool reuse_compact_indices);
-void dequantize_k_cache_paged_hcu(
-    const Tensor& cache, const Tensor& token_ids, Tensor& output,
-    int64_t page_size, bool fp8_fnuz);
-void dsv41_rope_fake_quant_store(
-    const Tensor& input, const Tensor& freqs, Tensor& cache,
-    const Tensor& indices, int64_t page_size);
-Tensor dsv41_pool_pairs_norm(
-    const Tensor& previous, const Tensor& current,
-    const Tensor& previous_score, const Tensor& score, const Tensor& weight, double eps);
 std::vector<Tensor> engram_hash_ids_hcu(
     const Tensor&, const Tensor&, const Tensor&,
     const std::optional<Tensor>&, const std::optional<Tensor>&,
     const Tensor&, const Tensor&, const Tensor&, const Tensor&,
     int64_t, int64_t, int64_t, int64_t, int64_t);
-void combine_topk_swa_indices_hcu(
-    const Tensor& topk_indices, const Tensor& query_start_loc,
-    const Tensor& query_pos, const Tensor& seq_lens, const Tensor& gather_lens,
-    const Tensor& compressed_base, const Tensor& swa_base,
-    Tensor& out_indices, Tensor& out_lens,
-    int64_t window_size, int64_t compress_ratio, int64_t topk);
-std::vector<torch::Tensor> dsv4_pack_c4_topk_workspace(
-    const torch::Tensor&, const torch::Tensor&, const torch::Tensor&,
-    int64_t, int64_t);
-void dequantize_k_cache_paged_hcu_selected(
-    const torch::Tensor&, const torch::Tensor&, const torch::Tensor&,
-    const torch::Tensor&, torch::Tensor&, int64_t, bool);
-torch::Tensor dsv4_dequantize_sparse_topk_out(
-    const torch::Tensor&, const torch::Tensor&, const torch::Tensor&,
-    const torch::Tensor&, torch::Tensor&, int64_t, int64_t, bool);
-void dequantize_k_cache_paged_hcu_counted(
-    const torch::Tensor&, const torch::Tensor&, torch::Tensor&,
-    int64_t, bool, const torch::Tensor&);
-std::vector<torch::Tensor> dsv4_pack_sparse_topk_workspace(
-    const torch::Tensor&, const torch::Tensor&, const torch::Tensor&,
-    int64_t, int64_t, int64_t);
 
-void dsv4_dequantize_k_cache_paged_out(
-    torch::Tensor const& cache_u8,
-    torch::Tensor const& page_table,
-    torch::Tensor const& out,
-    int64_t page_size,
-    std::optional<torch::Tensor> valid_count);
-void dsv4_gather_upconvert_k_cache_paged(
-    torch::Tensor const& cache,
-    torch::Tensor const& indices,
-    torch::Tensor const& lengths,
-    torch::Tensor const& dst,
-    torch::Tensor const& compact,
-    int64_t page_size);
-void dsv4_gather_upconvert_dual_k_cache_paged(
-    torch::Tensor const& swa_cache,
-    torch::Tensor const& swa_indices,
-    torch::Tensor const& swa_lengths,
-    torch::Tensor const& swa_dst,
-    torch::Tensor const& swa_compact,
-    int64_t swa_page_size,
-    torch::Tensor const& extra_cache,
-    torch::Tensor const& extra_indices,
-    torch::Tensor const& extra_lengths,
-    torch::Tensor const& extra_dst,
-    torch::Tensor const& extra_compact,
-    int64_t extra_page_size);
-void fast_topk_transform_interface(
-    const at::Tensor& score,
-    const at::Tensor& lengths,
-    at::Tensor& dst_page_table,
-    const at::Tensor& src_page_table,
-    const at::Tensor& cu_seqlens_q,
-    std::optional<at::Tensor> row_starts_opt,
-    bool parallel_candidates);
-void fast_topk_transform_sparse_mask_interface(
-    const at::Tensor& score,
-    const at::Tensor& nonzero_mask,
-    const at::Tensor& lengths,
-    at::Tensor& dst_page_table,
-    const at::Tensor& src_page_table,
-    const at::Tensor& cu_seqlens_q);
-void fast_topk_transform_ragged_interface(
-    const at::Tensor& score,
-    const at::Tensor& lengths,
-    at::Tensor& topk_indices_ragged,
-    const at::Tensor& topk_indices_offset,
-    std::optional<at::Tensor> row_starts_opt);
-void topk_transform_ragged_v2_interface(
-    const at::Tensor& score,
-    const at::Tensor& lengths,
-    at::Tensor& output,
-    const at::Tensor& offsets,
-    std::optional<at::Tensor> row_starts_opt);
-void fast_kpool_topk_transform_interface(
-    const at::Tensor& score,
-    const at::Tensor& lengths,
-    at::Tensor& output,
-    int64_t pool_size,
-    const at::Tensor& seq_lens,
-    std::optional<at::Tensor> page_table_opt,
-    std::optional<at::Tensor> topk_indices_offset_opt,
-    std::optional<at::Tensor> row_starts_opt,
-    std::optional<at::Tensor> page_table_row_index_opt);
-void fuse_act_quant_and_store_index_k_cache(
-    torch::Tensor input,      
-    torch::Tensor buf,     
-    torch::Tensor loc,    
-    int page_size,
-    float eps = 1e-5f,         
-    bool use_ue8m0 = false,
-    bool is_e4m3 = true);   
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> fuse_qk_quant_and_store_index_k_cache(
-    torch::Tensor q_input,        // [num_tokens, q_hidden_size]
-    torch::Tensor k_input,        // [num_tokens, k_hidden_size]
-    torch::Tensor k_buf,          // The destination Paged Cache Buffer (uint8)
-    torch::Tensor k_loc,          // [num_tokens] the cache block indices (int64)
-    int page_size,
-    c10::optional<torch::Tensor> weights_in_opt = c10::nullopt,
-    float q_scale_factor = 1.0f,  
-    float k_scale_factor = 1.0f,  
-    float eps = 1e-5f,        
-    bool use_ue8m0 = false,
-    bool is_e4m3 = true);
-void fused_quantize_and_store_mla_kv_cache(
-    torch::Tensor k_nope,  
-    torch::Tensor k_rope,    
-    torch::Tensor kv_buffer, 
-    torch::Tensor loc,        
-    const std::string& fp8_dtype = "fp8_e4m3",
-    float eps = 1e-5f
-);
-void fused_quantize_and_store_mla_kv_cache_dual(torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, std::optional<torch::Tensor>, std::optional<torch::Tensor>, std::optional<torch::Tensor>, float);
-torch::Tensor main_kv_loc_to_compact(torch::Tensor, torch::Tensor, int64_t);
-void fused_concat_and_store_mla_kv_cache(
-    torch::Tensor k_nope,
-    torch::Tensor k_rope,
-    torch::Tensor kv_buffer,
-    torch::Tensor loc,
-    const std::string& fp8_dtype = "fp8_e4m3"
-);
 std::tuple<Tensor, Tensor, Tensor> qkv_split_rms_rotary_embedding_fuse(
     Tensor& positions, 
     Tensor& qkv, 
@@ -752,111 +393,7 @@ std::tuple<Tensor, Tensor, Tensor> gemma_qkv_split_rms_rotary_embedding_fuse(
     int64_t head_size, Tensor& cos_sin_cache, bool is_neox, Tensor weight_q,
     Tensor weight_k, std::optional<Tensor> residual_q,
     std::optional<Tensor> residual_k, double epsilon); 
-void fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert(
-    Tensor& q,
-    const Tensor& kv,
-    Tensor& k_cache,
-    const Tensor& slot_mapping,
-    const Tensor& position_ids,
-    const Tensor& cos_sin_cache,
-    double eps,
-    int64_t cache_block_size);
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> quantize_nope_fp8_rope_bf16_pack(
-    torch::Tensor k_bf16,
-    float eps
-); 
-void quantize_nope_fp8_rope_bf16_pack_store(
-    torch::Tensor k_bf16,
-    torch::Tensor buf,
-    torch::Tensor loc,
-    int page_size,
-    float eps
-);   
-bool supports_mhc_repeat_cp_sglang(
-    const torch::Tensor& hidden_states, int64_t hc_mult,
-    int64_t cp_size, int64_t cp_rank);
-torch::Tensor mhc_repeat_cp_sglang(
-    const torch::Tensor& hidden_states, int64_t hc_mult,
-    int64_t cp_size, int64_t cp_rank);
-torch::Tensor& mhc_repeat_cp_sglang_out(
-    const torch::Tensor& hidden_states, int64_t hc_mult,
-    int64_t cp_size, int64_t cp_rank, torch::Tensor& out);
-void fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_int32(
-    Tensor& q,
-    const Tensor& kv,
-    Tensor& k_cache,
-    const Tensor& slot_mapping,
-    const Tensor& position_ids,
-    const Tensor& cos_sin_cache,
-    double eps,
-    int64_t cache_block_size);
-void fused_deepseek_v4_qnorm_rope_kvnorm_rope_quant_insert_int32(
-    Tensor& q,
-    const Tensor& kv,
-    const Tensor& kv_norm_weight,
-    Tensor& k_cache,
-    const Tensor& slot_mapping,
-    const Tensor& position_ids,
-    const Tensor& cos_sin_cache,
-    double eps,
-    int64_t cache_block_size);
-void fused_deepseek_v4_qnorm_rope_kv_rope(
-    Tensor& q,
-    Tensor& kv,
-    const Tensor& position_ids,
-    const Tensor& cos_sin_cache,
-    double eps);
-void fused_deepseek_v4_qnorm_rope_kvnorm_rope(
-    Tensor& q,
-    Tensor& kv,
-    const Tensor& kv_norm_weight,
-    const Tensor& position_ids,
-    const Tensor& cos_sin_cache,
-    double eps);
-void fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp(
-    Tensor& q,
-    const Tensor& kv,
-    Tensor& k_cache,
-    const Tensor& slot_mapping,
-    const Tensor& q_position_ids,
-    const Tensor& kv_position_ids,
-    const Tensor& cos_sin_cache,
-    double eps,
-    int64_t cache_block_size);
-void fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp_int32(
-    Tensor& q,
-    const Tensor& kv,
-    Tensor& k_cache,
-    const Tensor& slot_mapping,
-    const Tensor& q_position_ids,
-    const Tensor& kv_position_ids,
-    const Tensor& cos_sin_cache,
-    double eps,
-    int64_t cache_block_size);
-void topk_ids_postprocess(torch::Tensor topk_ids, torch::optional<torch::Tensor> logical_to_physical_map, torch::optional<torch::Tensor> num_token_non_padded);
 torch::Tensor dpskv4_hc_head_fused(torch::Tensor mixes, torch::Tensor x, torch::Tensor hc_scale, torch::Tensor hc_base, double hc_eps);
-void topk_transform_512(
-    const at::Tensor& scores,
-    const at::Tensor& seq_lens,
-    const at::Tensor& page_tables,
-    at::Tensor& out_page_indices,
-    int64_t page_size,
-    std::optional<at::Tensor> out_raw_indices_opt);
-void topk_transform_1024(
-    const at::Tensor& scores,
-    const at::Tensor& seq_lens,
-    const at::Tensor& page_tables,
-    at::Tensor& out_page_indices,
-    int64_t page_size,
-    std::optional<at::Tensor> out_raw_indices_opt);
-void lightop_hcu_alloc_extend_kernel(
-    const Tensor pre_lens_ptr,
-    const Tensor seq_lens_ptr,
-    const Tensor last_loc_ptr,
-    const Tensor free_page_ptr,
-    Tensor out_indices,
-    int64_t bs,
-    int64_t page_size);
 void mimo_v2_split_rope_vscale_kv_store(
     Tensor& positions,
     Tensor& qkv,
@@ -881,79 +418,7 @@ void mimo_v2_split_rope_vscale_kv_store(
 }
 }
 
-
-namespace lightop_int8_blaslt {
-std::optional<torch::Tensor> scaled_mm(
-    const torch::Tensor& input, const torch::Tensor& weight,
-    const torch::Tensor& scale_input, const torch::Tensor& scale_weight,
-    int solution);
-}
-
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("fill_swa_ring_mapping", &lightop::dsv41::fill_swa_ring_mapping,
-        py::arg("mapping"), py::arg("requests"), py::arg("prefixes"),
-        py::arg("table"), py::arg("positions") = py::none(),
-        py::arg("locations") = py::none(), py::arg("window") = 512,
-        py::arg("ring") = 1024, py::arg("block") = 8);
-  m.attr("PREFILL_GATHER_TRITON_NAN_COMPAT_VERSION") = 1;
-  m.def("spark_mla_rope_cat_store", &at::native::spark_mla_rope_cat_store,
-        "Spark MLA block-specialized BF16 RoPE, concat and FP8 KV store",
-        py::arg("positions"), py::arg("query_nope"), py::arg("query_rope"),
-        py::arg("key_nope"), py::arg("key_rope"), py::arg("cosine_sine"),
-        py::arg("locations"), py::arg("query_out"), py::arg("key_rope_out"),
-        py::arg("cache"), py::arg("neox"), py::arg("quant_epsilon") = 1e-6,
-        py::arg("heads_per_block") = 4);
-    m.def("indexer_k_norm_rope_hadamard_store", &at::native::indexer_k_norm_rope_hadamard_store,
-          "Indexer K LayerNorm, BF16 RoPE, Hadamard and mirrored INT8 cache store");
-    m.def("indexer_q_rope_hadamard_quant", &at::native::indexer_q_rope_hadamard_quant,
-          "Indexer Q RoPE/Hadamard/INT8 preparation with FP32 head gates");
-    m.def("mla_q_absorb_rope_concat", &at::native::mla_q_absorb_rope_concat,
-          "BF16 MLA Q-absorb, Q RoPE and Q concat for BS2/3/4");
-
-  // Source-migrated LMSlimQuant entry points.  The leading underscore keeps
-  // them private to LightOp's Python compatibility layer.
-  m.def("_lmslimquant_rocblas_gemm_int8",
-        &lightop::lmslimquant_native::rocblas_gemm_int8);
-  m.def("_lmslimquant_rocblas_gemm_fp16",
-        &lightop::lmslimquant_native::rocblas_gemm_fp16);
-  m.def("_lmslimquant_gemm_w4a16_v2",
-        &lightop::lmslimquant_native::gemm_w4a16_v2);
-  m.def("_lmslimquant_awq_input_padding",
-        &lightop::lmslimquant_native::awq_input_padding);
-  m.def("_lmslimquant_convert_s4_k_m8",
-        &lightop::lmslimquant_native::convert_s4_k_m8);
-  m.def("_lmslimquant_permute_trans",
-        &lightop::lmslimquant_native::permute_trans);
-  m.def("_lmslimquant_awq_dequant_colmajor",
-        &lightop::lmslimquant_native::awq_dequant_colmajor);
-  m.def("_lmslimquant_dequant_w4_gemm_colmajor",
-        &lightop::lmslimquant_native::dequant_w4_gemm_colmajor);
-  m.def("_lmslimquant_gptq_gemm",
-        &lightop::lmslimquant_native::gptq_gemm_native);
-  m.def("_lmslimquant_gptq_shuffle",
-        &lightop::lmslimquant_native::gptq_shuffle_native);
-  m.def("_lmslimquant_hipblaslt_gemm_channelwise",
-        &hipblaslt_gemm_v2::hipblaslt_gemm_channelwise);
-  m.def("_lmslimquant_hipblaslt_gemm_channelwise_kme",
-        &hipblaslt_gemm_v2::hipblaslt_gemm_channelwise_kme);
-  m.def("_lmslimquant_hipblaslt_gemm_blockwise",
-        &hipblaslt_gemm_v2::hipblaslt_gemm_blockwise);
-  m.def("_lmslimquant_blaslt_w8a8_fp16_gemm",
-        &hipblaslt_gemm::w8a8_fp16_gemm,
-        py::arg("mat_a"), py::arg("mat_b"), py::arg("scale_a"),
-        py::arg("scale_b"), py::arg("output"), py::arg("m"), py::arg("n"),
-        py::arg("k"), py::arg("batch"), py::arg("transpose_flag"),
-        py::arg("alpha"), py::arg("beta"), py::arg("bias") = py::none());
-  m.def("_lmslimquant_blaslt_w8a8_bf16_gemm",
-        &hipblaslt_gemm::w8a8_bf16_gemm,
-        py::arg("mat_a"), py::arg("mat_b"), py::arg("scale_a"),
-        py::arg("scale_b"), py::arg("output"), py::arg("m"), py::arg("n"),
-        py::arg("k"), py::arg("batch"), py::arg("transpose_flag"),
-        py::arg("alpha"), py::arg("beta"), py::arg("bias") = py::none());
-  m.def("_lmslimquant_blaslt_w8a8_bf16_gemm_cached",
-        &lightop_int8_blaslt::scaled_mm,
-        py::arg("input"), py::arg("weight"), py::arg("scale_input"),
-        py::arg("scale_weight"), py::arg("solution"));
 
   m.def("grid_sample_forward_autograd", &at::native::grid_sample_forward_autograd, "grid_sample forward autograd");
   m.def("grid_sample_forward", &at::native::grid_sample_forward, "grid_sample forward");
@@ -979,8 +444,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("get_batch_per_block",&at::native::get_batch_per_block, "get_batch_per_block");
   m.def("bias_gelu_forward", &at::native::fused_bias_gelu_forward, "fused_bias_gelu forward");
   m.def("bias_gelu_backward", &at::native::fused_bias_gelu_backward, "fused_bias_gelu backward");
-  m.def("rotary_positional_embedding_forward", &at::native::RoPE_forward_gpu, "rotary positional embedding forward for gpu");
-  m.def("rotary_positional_embedding_backward", &at::native::RoPE_backward_gpu, "rotary positional embedding backward for gpu");
   m.def("FusedBiasSwiGLU_forward", &at::native::FusedBiasSwiGLU_forward_gpu, "fused bias SwiGLU forward for gpu");
   m.def("FusedBiasSwiGLU_backward", &at::native::FusedBiasSwiGLU_backward_gpu, "fused bias SwiGLU backward for gpu");
   m.def("fused_bmm", &at::native::fused_bmm, "fused transepose bmm transpose");
@@ -988,60 +451,17 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("bias_dropout_add_backward", &at::native::fuse_bias_dropout_add_backward, "fuse_bias_dropout_add backward");
   m.def("sum_opt", &at::native::sum_opt, "sum_opt");
   m.def("mean_opt", &at::native::mean_opt, "mean_opt");
-  m.def("topk_opt", &at::native::topk_opt, "topk_opt");
   m.def("gemm_opt", &at::native::gemm_opt, "gemm_opt",
         pybind11::arg("x"), pybind11::arg("weight"), pybind11::arg("out_dtype") = pybind11::none());
   m.def("gemm_w4_a16", &at::native::gemm_w4_a16, "gemm_w4_a16");
-  m.def("gemm_awq_w4a16", &at::native::gemm_awq_w4a16, "gemm_awq_w4a16");
-  m.def("gemm_awq_w4a16_dequant", &at::native::gemm_awq_w4a16_dequant, "gemm_awq_w4a16_dequant");
   m.def("w4_to_w16", &at::native::w4_to_w16, "w4_to_w16");
   m.def("gemm_w8_a16_fp8_colmajor", &at::native::gemm_w8_a16_fp8_colmajor, "gemm_w8_a16_fp8_colmajor");
   m.def("fp8to16", &at::native::fp8to16, "fp8to16");
-  m.def("grougemm_w8a8_pertensor_asm", &at::native::grougemm_w8a8_pertensor_asm, "grougemm_w8a8_pertensor_asm");
-  m.def("grougemm_bf16_fp16_nt_asm", &at::native::grougemm_bf16_fp16_nt_asm, "grougemm_bf16_fp16_nt_asm");
-  m.def("grougemm_bf16_fp16_tn_asm", &at::native::grougemm_bf16_fp16_tn_asm, "grougemm_bf16_fp16_tn_asm");
-  m.def("grougemm_bf16_fp16_nn_asm", &at::native::grougemm_bf16_fp16_nn_asm, "grougemm_bf16_fp16_nn_asm");
-  m.def("m_grouped_w8a8_gemm_nt_contig_asm", &at::native::m_grouped_w8a8_gemm_nt_contig_asm, "m_grouped_w8a8_gemm_nt_contig_asm");
-  m.def("m_grouped_w16a16_gemm_nt_contig_asm",&at::native::m_grouped_w16a16_gemm_nt_contig_asm,"m_grouped_w16a16_gemm_nt_contig_asm");
-  m.def("m_grouped_w8a8_gemm_nt_nopad_contig_asm",&at::native::m_grouped_w8a8_gemm_nt_nopad_contig_asm,"m_grouped_w8a8_gemm_nt_nopad_contig_asm");
   m.def("gemm_w8_a8_smooth_colmajor", &at::native::gemm_w8_a8_smooth_colmajor, "gemm_w8_a8_smooth_colmajor");
-  m.def("gemm_w8a8_smooth_asm", &at::native::gemm_w8a8_smooth_asm, "gemm_w8a8_smooth_asm",
-        py::arg("A"), py::arg("B"), py::arg("As"), py::arg("Bs"), py::arg("bias"),
-        py::arg("output_dtype"), py::arg("M"), py::arg("N"), py::arg("K"),
-        py::arg("isTunning_slide_block"), py::arg("tunning_slide_block"),
-        py::arg("input_scale_first") = false);
-  m.def("moe_w16a16_asm", &at::native::moe_w16a16_asm, "moe_w16a16_asm");
-  m.def("moe_marlin_w16a16_asm", &at::native::moe_marlin_w16a16_asm, "moe_marlin_w16a16_asm");
   m.def("bilinear_upsample", &at::native::bilinear_upsample, "bilinear_upsample");
   m.def("bilinear_upsample_backward", &at::native::bilinear_upsample_backward, "bilinear_upsample_backward");
-  m.def("store_kv_cache", &at::native::store_kv_cache, "store_kv_cache");
-  m.def("store_kv_cache_paged", &at::native::store_kv_cache_paged, "store_kv_cache_paged");
   m.def("topk_softmax", &at::native::topk_softmax, "topk_softmax");
-  m.def("gemm_w8a8_asm", &at::native::gemm_w8a8_asm, "gemm_w8a8_block_asm");
-  m.def("moe_w8a8_asm", &at::native::moe_w8a8_asm, "moe_w8a8_asm");
-  m.def("moe_marlin_w8a8_asm", &at::native::moe_marlin_w8a8_asm, "moe_marlin_w8a8_asm");
-  m.def("moe_marlin_w8a8_fp8_asm", &at::native::moe_marlin_w8a8_fp8_asm, "moe_marlin_w8a8_fp8_asm");
-  m.def("moe_w4a8_asm", &at::native::moe_w4a8_asm, "moe_w4a8_asm");
-  m.def("moe_w4a8_marlin_asm", &at::native::moe_w4a8_marlin_asm, "moe_w4a8_marlin_asm");
-  m.def("moe_groupgemm_w4a8_asm", &at::native::moe_groupgemm_w4a8_asm, "moe_groupgemm_w4a8_asm");
-  m.def("moe_groupgemm_marlin_w4a8_asm", &at::native::moe_groupgemm_marlin_w4a8_asm, "moe_groupgemm_marlin_w4a8_asm");
-  m.def("m_grouped_marlin_w4a8_gemm_nt_masked_asm", &at::native::m_grouped_marlin_w4a8_gemm_nt_masked_asm, "m_grouped_marlin_w4a8_gemm_nt_masked_asm");
-  m.def("m_grouped_marlin_w8a8_gemm_nt_masked_asm", &at::native::m_grouped_marlin_w8a8_gemm_nt_masked_asm, "m_grouped_marlin_w8a8_gemm_nt_masked_asm");
-  m.def("m_grouped_marlin_fp8_gemm_nt_masked_asm", &at::native::m_grouped_marlin_fp8_gemm_nt_masked_asm, "m_grouped_marlin_fp8_gemm_nt_masked_asm");
-  m.def("m_grouped_bf16_gemm_nt_masked_asm", &at::native::m_grouped_bf16_gemm_nt_masked_asm, "m_grouped_bf16_gemm_nt_masked_asm");
-  m.def("blockwise_scaled_cast_transpose", &at::native::blockwise_scaled_cast_transpose, "blockwise_scaled_cast_transpose");
 
-  m.def("rotary_embedding_fuse", &at::native::rotary_embedding_fuse, "rotary_embedding_fuse",py::arg("positions"),py::arg("query"),py::arg("key"),py::arg("head_size"),py::arg("cos_sin_cache"),py::arg("is_neox"));
-  m.attr("ROTARY_EMBEDDING_BF16_ROUNDED_OUT_ABI") = 2;
-  m.def("rotary_embedding_deepseek_fuse",
-        &at::native::rotary_embedding_deepseek_fuse,
-        "RoPE: legacy in-place, or explicit outputs with rounded BF16 products",
-        py::arg("positions"), py::arg("query"), py::arg("key"),
-        py::arg("head_size"), py::arg("cos_sin_cache"), py::arg("is_neox"),
-        py::arg("offsets") = py::none(), py::kw_only(),
-        py::arg("round_bf16_products") = false,
-        py::arg("query_out") = py::none(), py::arg("key_out") = py::none());
-  m.def("groupgemm",&at::native::groupgemm,"groupgemm");
   m.def("fuse_silu_mul_quant",&at::native::fuse_silu_mul_quant,"fuse_silu_mul_quant");
   m.attr("SILU_CLAMP_QUANT_ROUNDING_VERSION") = 2;
   m.def(
@@ -1094,65 +514,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("ds_concat",&at::native::ds_concat,"ds_concat");
   m.def("ms_deform_attn_forward", &at::native::ms_deform_attn_cuda_forward,"ms_deform_attn_forward");
   m.def("ms_deform_attn_backward", &at::native::ms_deform_attn_cuda_backward,"ms_deform_attn_backward");
-  m.def("mha_norm_rope_qkv_inplace_cuda", &at::native::mha_norm_rope_qkv_inplace_cuda,"mha_norm_rope_qkv_inplace_cuda");
-  m.def("cross_norm_rope_q_kv_inplace_cuda", &at::native::cross_norm_rope_q_kv_inplace_cuda,"cross_norm_rope_q_kv_inplace_cuda");
   m.def("box_cost", &at::native::box_cost, "box_cost");
   m.def("encode_reg_t", &at::native::encode_reg_t, "encode_reg_t");
 
-
-
-  m.def("dsv41_build_swa_token_ids", &lightop::dsv41::build_swa_token_ids,
-        "SWA metadata prefix and physical token gather");
-  m.def("dsv41_remap_indices_to_staging", &lightop::dsv41::remap_indices_to_staging,
-        "Inverse page map and fused staging token remap");
-  m.def("dsv41_ragged_topk_postprocess", &lightop::dsv41::ragged_topk_postprocess,
-        "Score masking, ascending index sort and ragged physical/raw outputs");
-  m.def("dsv41_pair_partners", &lightop::dsv41::pair_partners,
-        "DSV4.1 pair-partner gather and ordered ring-state update",
-        py::arg("kv"), py::arg("score"), py::arg("req"), py::arg("pos"),
-        py::arg("pad"), py::arg("state"), py::arg("ring_size"));
-
   m.def("batch_linear_assignment", &at::native::batch_linear_assignment, "batch_linear_assignment");
   m.def("fill_zeros", &at::native::fill_zeros,"fill_zeros");
-
-  m.def("reshape_and_cache_cuda", &at::native::reshape_and_cache_cuda,"reshape_and_cache_cuda");
-  m.def("destindex_copy_quantize_int8_cuda", &at::native::destindex_copy_quantize_int8_cuda, "destindex_copy_quantize_int8_cuda");
-  m.def("destindex_dequantize_int8_cuda", &at::native::destindex_dequantize_int8_cuda, "destindex_dequantize_int8_cuda");
 
   m.def("backward_polyfill_cuda", &at::native::backward_polyfill_cuda, "backward_polyfill_cuda");
   m.def("forward_polyfill_cuda", &at::native::forward_polyfill_cuda, "forward_polyfill_cuda");
   m.def("forward_polyfill_lightop", &at::native::forward_polyfill_lightop, "forward_polyfill_lightop");
   m.def("backward_polyfill_lightop", &at::native::backward_polyfill_lightop, "backward_polyfill_lightop");
-  m.def(
-      "per_token_dynamic_quant_int8",
-      &at::native::per_token_dynamic_quant_int8,
-      "per_token_dynamic_quant_int8",
-      py::arg("out"),
-      py::arg("input"),
-      py::arg("scales"),
-      py::arg("smoothscale"),
-      py::arg("round_after_smooth") = false,
-      py::arg("limit") = -1.0);
-  m.def("rope_per_token_quant_out", &at::native::rope_per_token_quant_out);
-  m.def("scale_per_token_quant_int8_out",
-        &at::native::scale_per_token_quant_int8_out);
-  m.def("per_token_quant_int8_minimax_out", &at::native::per_token_quant_int8_minimax_out);
-  m.def(
-      "per_token_quant_int8_out",
-      &at::native::per_token_quant_int8_out,
-      "Per-token symmetric INT8 quantization (out variant)",
-      py::arg("out"),
-      py::arg("input"),
-      py::arg("scales"), py::arg("smooth") = py::none(),
-      py::arg("weights") = py::none(), py::arg("gate_output") = py::none());
-  m.attr("per_token_quant_int8_out_supports_gate") = true;
-  m.def("markov_gemv_add_argmax", &lightop::sampling::markov_gemv_add_argmax,
-        py::arg("latent"), py::arg("weight"), py::arg("base_logits"),
-        "BF16 rank-256 Markov GEMV + BF16/FP32 logits add + greedy argmax (BS1-4)");
-  m.def("top_k_sampling_from_probs", &lightop::sampling::top_k_sampling_from_probs, "top_k_sampling_from_probs");
-  m.def("top_p_sampling_from_probs", &lightop::sampling::top_p_sampling_from_probs, "top_p_sampling_from_probs");
-  m.def("top_k_top_p_sampling_from_probs", &lightop::sampling::top_k_top_p_sampling_from_probs, "top_k_top_p_sampling_from_probs");
-  m.def("top_k_first_top_p_sampling_from_probs", &lightop::sampling::top_k_first_top_p_sampling_from_probs, "top_k_first_top_p_sampling_from_probs");
 
   m.def("silu_and_mul_opt", &at::native::silu_and_mul_opt, "silu_and_mul_opt");
   m.def("gelu_and_mul_opt", &at::native::gelu_and_mul_opt, "gelu_and_mul_opt");
@@ -1162,39 +533,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("add_int8", &at::native::add_int8, "add_int8", py::arg("a"), py::arg("b"), py::arg("saturate") = true);
   m.def("sub_int8", &at::native::sub_int8, "sub_int8", py::arg("a"), py::arg("b"), py::arg("saturate") = true);
   m.def("pack_padded_sequence_custom", &at::native::pack_padded_sequence_custom, "pack_padded_sequence_custom");
-  m.def("fake_quantize_per_tensor_affine_custom", &at::native::fake_quantize_per_tensor_affine_custom, "fake_quantize_per_tensor_affine_custom");
-  m.def("fake_quantize_per_channel_affine_custom", &at::native::fake_quantize_per_channel_affine_custom, "fake_quantize_per_channel_affine_custom");
-  m.def("awq_w4a16_dequant_trans",
-          &at::native::awq_w4a16_dequant_trans, 
-          py::arg("_weight"), 
-          py::arg("_scaling_factors"), 
-          py::arg("_zeros"), 
-          py::arg("IC"), 
-          py::arg("OC"), 
-          py::arg("group_size")); 
- m.def("ds_fused_qkv_cast_fp8", &at::native::ds_fused_qkv_cast_fp8, "ds_fused_qkv_cast_fp8");    
- m.def("gather_convert_fp8_cache", &at::native::gather_convert_fp8_cache, "gather_convert_fp8_cache");    
- m.def(
-     "gather_and_maybe_dequant_cache",
-     &at::native::gather_and_maybe_dequant_cache,
-     "Gather paged KV cache. Supported kv_cache_dtype values are auto, "
-     "fp8/fp8_e4m3, fp8_ds_mla, and fp8_e5m2. FP8 inputs are "
-     "dequantized as decode(cache) * scale to the FP32, FP16, or BF16 "
-     "dtype selected by dst.",
-     py::arg("src_cache"),
-     py::arg("dst"),
-     py::arg("block_table"),
-     py::arg("cu_seq_lens"),
-     py::arg("token_to_seq"),
-     py::arg("num_tokens"),
-     py::arg("kv_cache_dtype"),
-     py::arg("scale"),
-     py::arg("seq_starts") = py::none());
-
- m.def("per_token_quant_fp8", &at::native::per_token_quant_fp8,
-       py::arg("out"), py::arg("input"), py::arg("scales"),
-       py::arg("quant_ndim") = 1, py::arg("threads") = 256);
- m.attr("PER_TOKEN_QUANT_FP8_VERSION") = 2;
 
  m.def("swiglu_oai_build_gate_table", &at::native::swiglu_oai_build_gate_table);
  m.def("swiglu_oai_build_int8_quant_table", &at::native::swiglu_oai_build_int8_quant_table);
@@ -1205,123 +543,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
  m.def("swiglu_oai_int8_quant_contiguous", &at::native::swiglu_oai_int8_quant_contiguous, "BF16-rounded OAI row INT8 quantization");
  m.def("swiglu_oai_int8_quant_masked", &at::native::swiglu_oai_int8_quant_masked, "Masked BF16-rounded OAI row INT8 quantization with zero/unit padding");
  m.def("swiglu_oai_fp8_quant_contiguous", &at::native::swiglu_oai_fp8_quant_contiguous, "Contiguous BF16 OAI activation and per-token E4M3FN quantization", pybind11::arg("input"), pybind11::arg("alpha") = 1.702, pybind11::arg("beta") = 1.0, pybind11::arg("limit") = 7.0);
- m.def("per_token_group_quant_fp8", &at::native::per_token_group_quant_fp8, "per_token_group_quant_fp8");  
- m.def("top_k_per_row_prefill", &at::native::top_k_per_row_prefill, "top_k_per_row_prefill");  
- m.def("top_k_per_row_decode", &at::native::top_k_per_row_decode, "top_k_per_row_decode");  
- m.def("convert_req_index_to_global_index", &at::native::convert_req_index_to_global_index, "convert_req_index_to_global_index");
 
-  m.def("fast_topk_transform_interface", &at::native::fast_topk_transform_interface,
-        "transform length TopK indices into paged KVCache",
-        py::arg("score"), py::arg("lengths"), py::arg("dst_page_table"),
-        py::arg("src_page_table"), py::arg("cu_seqlens_q"),
-        py::arg("row_starts_opt"), py::arg("parallel_candidates") = false);
- m.def(
-     "fast_topk_transform_sparse_mask_interface",
-     &at::native::fast_topk_transform_sparse_mask_interface,
-     "fast_topk_transform_sparse_mask_interface");
- m.def("fast_topk_transform_ragged_interface", &at::native::fast_topk_transform_ragged_interface, "fast_topk_transform_ragged_interface");   
- m.def("topk_transform_ragged_v2_interface", &at::native::topk_transform_ragged_v2_interface, "Fused HIP ragged TopK and additive index transform");
- m.def(
-     "fast_kpool_topk_transform_interface",
-     &at::native::fast_kpool_topk_transform_interface,
-     "Fused kpool topk, token expansion, index transform, and tail append",
-     py::arg("score"),
-     py::arg("lengths"),
-     py::arg("output"),
-     py::arg("pool_size"),
-     py::arg("seq_lens"),
-     py::arg("page_table") = py::none(),
-     py::arg("topk_indices_offset") = py::none(),
-     py::arg("row_starts") = py::none(),
-     py::arg("page_table_row_index") = py::none());
- m.def("cp_gather_and_upconvert_fp8_kv_cache", &at::native::cp_gather_and_upconvert_fp8_kv_cache, "cp_gather_and_upconvert_fp8_kv_cache");   
- m.def("prefill_gather_and_upconvert_fp8_kv_cache", &at::native::prefill_gather_and_upconvert_fp8_kv_cache, "prefill_gather_and_upconvert_fp8_kv_cache");
- m.def("decode_gather_and_up_convert", &at::native::decode_gather_and_up_convert, "decode_gather_and_up_convert");
- m.def(
-     "decode_gather_and_up_convert_with_indices",
-     &at::native::decode_gather_and_up_convert_with_indices,
-     "Decode gather/up-convert with optional request-local KV deduplication",
-     py::arg("src_cache"),
-     py::arg("token_ids"),
-     py::arg("dst"),
-     py::arg("valid_lengths"),
-     py::arg("compact_indices"),
-     py::arg("tokens_per_request") = 1,
-     py::arg("dedup_table") = py::none(),
-     py::arg("reuse_compact_indices") = false);
- m.def("dequantize_k_cache_paged_hcu", &at::native::dequantize_k_cache_paged_hcu,
-       "V4 packed paged KV dequantization into preallocated BF16 output");
  m.def("engram_hash_ids_hcu", &at::native::engram_hash_ids_hcu,
        "HCU Engram EXTEND predecessor lookup and exact INT64 hashing");
- m.def("dsv41_rope_fake_quant_store", &at::native::dsv41_rope_fake_quant_store,
-       "DSV41 BF16 RoPE, compressed-KV fake quantization and V4 paged store");
- m.def("dsv41_pool_pairs_norm", &at::native::dsv41_pool_pairs_norm,
-       "DSV41 CP pair softmax pooling, BF16 round-trip and RMS normalization");
- m.def("dequantize_k_cache_paged_hcu_selected", &at::native::dequantize_k_cache_paged_hcu_selected,
-      py::arg("cache"), py::arg("token_ids"), py::arg("selected_rows"), py::arg("valid_count"),
-      py::arg("out"), py::arg("page_size"), py::arg("fp8_fnuz"));
-  m.def("dsv4_dequantize_sparse_topk_out", &at::native::dsv4_dequantize_sparse_topk_out,
-      py::arg("cache"), py::arg("full_ids"), py::arg("indices"), py::arg("lengths"),
-      py::arg("out"), py::arg("topk"), py::arg("page_size"), py::arg("fp8_fnuz"));
- m.def("dequantize_k_cache_paged_hcu_counted",
-       &at::native::dequantize_k_cache_paged_hcu_counted,
-       "Dequantize the GPU-counted valid KV prefix into preallocated BF16 output",
-       py::arg("cache"), py::arg("token_ids"), py::arg("out"),
-       py::arg("page_size"), py::arg("fp8_fnuz"), py::arg("valid_count"));
- m.def("combine_topk_swa_indices_hcu", &at::native::combine_topk_swa_indices_hcu,
-       "Combine compressed TopK and positional SWA indices into a flat workspace");
- m.def("dsv4_pack_c4_topk_workspace",
-      &at::native::dsv4_pack_c4_topk_workspace,
-      "Pack a DSV4 C4 TopK union and remap query indices on GPU",
-      py::arg("full_ids"), py::arg("combined_indices"),
-      py::arg("combined_lens"), py::arg("topk"), py::arg("capacity"));
- m.def("dsv4_pack_sparse_topk_workspace",
-      &at::native::dsv4_pack_sparse_topk_workspace,
-      "Pack a C1/C2/C4 TopK union and rebase compressed/SWA indices on GPU",
-      py::arg("full_ids"), py::arg("combined_indices"),
-      py::arg("combined_lens"), py::arg("topk"), py::arg("capacity"),
-      py::arg("swa_rows") = -1);
-m.def(
-     "dsv4_dequantize_k_cache_paged_out",
-     &at::native::dsv4_dequantize_k_cache_paged_out,
-     "DSV4 flat E4M3FN/UE8M0 paged dequantization into preallocated BF16 output",
-     py::arg("cache_u8"), py::arg("page_table"), py::arg("out"), py::arg("page_size"),
-     py::arg("valid_count") = py::none());
- m.def(
-     "dsv4_gather_upconvert_k_cache_paged",
-     &at::native::dsv4_gather_upconvert_k_cache_paged,
-     "DPSKV4 single-cache paged FP8/UE8M0 gather, BF16 upconvert, and compact indices");
- m.def(
-     "dsv4_gather_upconvert_dual_k_cache_paged",
-     &at::native::dsv4_gather_upconvert_dual_k_cache_paged,
-     "DPSKV4 fused dual-cache paged gather, BF16 upconvert, and compact indices");
- m.def("fuse_act_quant_and_store_index_k_cache", &at::native::fuse_act_quant_and_store_index_k_cache, "fuse_act_quant_and_store_index_k_cache");
- m.def("fuse_qk_quant_and_store_index_k_cache", &at::native::fuse_qk_quant_and_store_index_k_cache, "fuse_qk_quant_and_store_index_k_cache");
- m.def("fused_quantize_and_store_mla_kv_cache", &at::native::fused_quantize_and_store_mla_kv_cache, "fused_quantize_and_store_mla_kv_cache");
-m.def("fused_quantize_and_store_mla_kv_cache_dual", &at::native::fused_quantize_and_store_mla_kv_cache_dual, py::arg("k_nope"), py::arg("k_rope"), py::arg("kv_buffer"), py::arg("loc"), py::arg("mirror_buffer") = py::none(), py::arg("mirror_loc") = py::none(), py::arg("concat_out") = py::none(), py::arg("eps") = 1e-6f);
-m.def("main_kv_loc_to_compact", &at::native::main_kv_loc_to_compact, py::arg("loc"), py::arg("physical_to_compact"), py::arg("page_size"));
- m.def("fused_concat_and_store_mla_kv_cache", &at::native::fused_concat_and_store_mla_kv_cache, "fused_concat_and_store_mla_kv_cache");
 
- m.def("fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert", &at::native::fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert, "fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert");
- m.def("quantize_nope_fp8_rope_bf16_pack", &at::native::quantize_nope_fp8_rope_bf16_pack, "quantize_nope_fp8_rope_bf16_pack");
- m.def("fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_int32", &at::native::fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_int32, "fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_int32");
- m.def("fused_deepseek_v4_qnorm_rope_kvnorm_rope_quant_insert_int32", &at::native::fused_deepseek_v4_qnorm_rope_kvnorm_rope_quant_insert_int32, "fused_deepseek_v4_qnorm_rope_kvnorm_rope_quant_insert_int32");
- m.def("fused_deepseek_v4_qnorm_rope_kv_rope", &at::native::fused_deepseek_v4_qnorm_rope_kv_rope, "fused_deepseek_v4_qnorm_rope_kv_rope");
- m.def("fused_deepseek_v4_qnorm_rope_kvnorm_rope", &at::native::fused_deepseek_v4_qnorm_rope_kvnorm_rope, "fused_deepseek_v4_qnorm_rope_kvnorm_rope");
- m.def("fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp", &at::native::fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp, "fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp");
- m.def("fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp_int32", &at::native::fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp_int32, "fused_deepseek_v4_qnorm_rope_kv_rope_quant_insert_pcp_int32");
- m.def("quantize_nope_fp8_rope_bf16_pack_store", &at::native::quantize_nope_fp8_rope_bf16_pack_store, "quantize_nope_fp8_rope_bf16_pack_store");
- m.def("supports_mhc_repeat_cp_sglang", &at::native::supports_mhc_repeat_cp_sglang,
-       "Metadata-only SGLang mHC repeat+CP preflight",
-       py::arg("hidden_states"), py::arg("hc_mult"), py::arg("cp_size"), py::arg("cp_rank"));
- m.def("mhc_repeat_cp_sglang", &at::native::mhc_repeat_cp_sglang,
-       "SGLang mHC CP-selected row broadcast",
-       py::arg("hidden_states"), py::arg("hc_mult"), py::arg("cp_size"), py::arg("cp_rank"));
- m.def("mhc_repeat_cp_sglang_out", &at::native::mhc_repeat_cp_sglang_out,
-       "SGLang mHC CP-selected row broadcast into a non-overlapping output",
-       py::arg("hidden_states"), py::arg("hc_mult"), py::arg("cp_size"),
-       py::arg("cp_rank"), py::arg("out"));
- m.def("topk_ids_postprocess",&at::native::topk_ids_postprocess,"topk_ids_postprocess");
  m.def("hc_mix_stats_sinkhorn_bf16x3", &at::native::hc_mix_stats_sinkhorn_bf16x3,
        py::arg("x"), py::arg("weight_parts"), py::arg("scale"), py::arg("base"),
        py::arg("sinkhorn_iters"), py::arg("rms_eps"), py::arg("hc_eps"), py::arg("hc_mult")=4);
@@ -1332,60 +557,12 @@ m.def("main_kv_loc_to_compact", &at::native::main_kv_loc_to_compact, py::arg("lo
        "RMS-normalized projection, or None when unsupported", py::arg("x"),
        py::arg("weight"), py::arg("eps") = 1e-6);
  m.def("dpskv4_hc_head_fused", &at::native::dpskv4_hc_head_fused, "dpskv4_hc_head_fused");
-  m.def("fused_dsa_cp_prefill_metadata", &at::native::fused_dsa_cp_prefill_metadata_launcher);
- m.def("fused_metadata_kernel_general", &at::native::fused_metadata_kernel_general_launcher,
-       "fused_metadata_kernel_general",
-       py::arg("seq_lens"),
-       py::arg("req_to_token"),
-       py::arg("req_pool_indices"),
-       py::arg("cache_seqlens_int32"),
-       py::arg("cu_seqlens_k"),
-       py::arg("page_table"),
-       py::arg("swa_page_table") = torch::nullopt,
-       py::arg("full_to_swa_mapping") = torch::nullopt,
-       py::arg("B"),
-       py::arg("max_seq_pages"),
-       py::arg("page_size"),
-       py::arg("seq_len_delta"),
-       py::arg("use_swa"));
 m.def("fuse_silu_and_mul_ep",&at::native::fuse_silu_and_mul_ep,"fuse_silu_and_mul_ep");
-m.def(
-     "topk_transform_512",
-     &at::native::topk_transform_512,
-     "DeepSeek V4 fused topk-512 and page-table transform",
-     py::arg("scores"),
-     py::arg("seq_lens"),
-     py::arg("page_tables"),
-     py::arg("out_page_indices"),
-     py::arg("page_size"),
-     py::arg("out_raw_indices") = py::none());       
-m.def(
-     "topk_transform_1024",
-     &at::native::topk_transform_1024,
-     "DeepSeek V4 fused topk-1024 and page-table transform",
-     py::arg("scores"),
-     py::arg("seq_lens"),
-     py::arg("page_tables"),
-     py::arg("out_page_indices"),
-     py::arg("page_size"),
-     py::arg("out_raw_indices") = py::none());
-m.def("hcu_alloc_extend_kernel", &at::native::lightop_hcu_alloc_extend_kernel,
-       "Parallel paged KV alloc-extend kernel",
-       py::arg("pre_lens_ptr"),
-       py::arg("seq_lens_ptr"),
-       py::arg("last_loc_ptr"),
-       py::arg("free_page_ptr"),
-       py::arg("out_indices"),
-       py::arg("bs"),
-       py::arg("page_size"));
 
   m.def("interleave_rows_", &lightop::cp_output::interleave_rows_,
         py::arg("gathered"), py::arg("cp_size"), py::arg("cycle_leaders"));
   m.def("make_interleave_plan_", &lightop::cp_output::make_interleave_plan_,
         py::arg("cycle_leaders"), py::arg("rows"), py::arg("cp_size"));
-
-  m.def("minimax_cp_fp8_pack", &at::native::minimax_cp_fp8_pack);
-  m.def("minimax_cp_cache_scatter", &at::native::minimax_cp_cache_scatter);
 
 }
 

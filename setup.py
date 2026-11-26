@@ -496,31 +496,17 @@ def get_extensions():
     # 已整体迁入 module_registry.json 的家族目录不在此列，避免把被 #include 的
     # 内部 .cu（如 moe_marlin_gemm/*、moe_gemm/w4a8/gemm2_prefill.cu）编入 _C。
     _CSRC_DIRS = [
-        ('asm', '*.cu'),
-        ('awq_w4a16_gemm', '*.cu'),
         ('common', '*.cpp'),
         ('kernels', '*.cu'),
-        ('kernels/blockwise_scaling', '*.cu'),
         ('kernels/bmm_scale', '*.cu'),
         ('kernels/concat', '*.cu'),
         ('kernels/cp_output', '*.cu'),
         ('kernels/gated_activation', '*.cu'),
         ('kernels/grid_sample', '*.cu'),
-        ('kernels/kvcache', '*.cu'),
         ('kernels/loss', '*.cu'),
-        ('kernels/mla', '*.cu'),
-        ('kernels/per_token_quant', '*.cu'),
         ('kernels/polyfill', '*.cu'),
-        ('kernels/sampling', '*.cu'),
         ('kernels/scaledmask', '*.cu'),
         ('kernels/softmax', '*.cu'),
-        ('kernels/topk', '*.cu'),
-        ('lmslimquant_native', '*.cpp'),
-        ('lmslimquant_native/awq', '*.cu'),
-        ('lmslimquant_native/gptq', '*.cu'),
-        ('lmslimquant_native/hipblaslt', '*.cu'),
-        ('lmslimquant_native/smoothquant', '*.cpp'),
-        ('lmslimquant_native/torch_bridge', '*.cu'),
         ('pybind', '*.cpp'),
     ]
 

@@ -19,7 +19,6 @@ if use_lightop:
     from ...gemmopt import gemm_w8a8_smooth
 
 # from lightop import op as lightop_op
-from ...op import rms_norm_dynamic_per_token_quant
 from ... import op as lightop_native
 from ...fuse_silu_mul_quant import fuse_silu_mul_quant
 
@@ -793,9 +792,9 @@ def lo_rms_norm_dynamic_per_token_quant_real(
     scales = torch.empty((input.numel() // input.shape[-1], 1),
                         device=input.device,
                         dtype=torch.float32)
-    rms_norm_dynamic_per_token_quant(output, input, weight,
-                                               scales, epsilon,
-                                               residual, update_input, limit)
+    lightop_native.rms_norm_dynamic_per_token_quant(output, input, weight,
+                                                    scales, epsilon,
+                                                    residual, update_input, limit)
     return output, scales
 
 def lo_rms_norm_dynamic_per_token_quant_fake(

@@ -73,5 +73,80 @@
             "./csrc/kernels/fused_deepep_prepare.cu",
             "./csrc/moe_gemm/binding_moe.cpp"
         ]
+    },
+    "asm_gemm": {
+        "extension": "lightop._ext.module_asm_gemm",
+        "sources": [
+            "./csrc/asm/*.cu",
+            "./csrc/asm/binding_asm_gemm.cpp"
+        ]
+    },
+    "lmslim_gemm": {
+        "extension": "lightop._ext.module_lmslim_gemm",
+        "sources": [
+            "./csrc/awq_w4a16_gemm/awq_w4a16_dequant.cu",
+            "./csrc/awq_w4a16_gemm/awq_w4a16_dequant_trans.cu",
+            "./csrc/awq_w4a16_gemm/awq_w4a16_gemm.cu",
+            "./csrc/lmslimquant_native/awq/format.cu",
+            "./csrc/lmslimquant_native/gptq/q_gemm.cu",
+            "./csrc/lmslimquant_native/hipblaslt/int8_blaslt_cached.cu",
+            "./csrc/lmslimquant_native/smoothquant/smquant_gemm.cpp",
+            "./csrc/lmslimquant_native/torch_bridge/call_gemm.cu",
+            "./csrc/lmslimquant_native/bindings.cpp",
+            "./csrc/lmslimquant_native/binding_lmslim_gemm.cpp"
+        ]
+    },
+    "kvcache": {
+        "extension": "lightop._ext.module_kvcache",
+        "sources": [
+            "./csrc/kernels/kvcache/*.cu",
+            "./csrc/kernels/dsv4_gather_upconvert.cu",
+            "./csrc/kernels/fused_metadata.cu",
+            "./csrc/kernels/topk/dsv4_topk_workspace.cu",
+            "./csrc/kernels/kvcache/binding_kvcache.cpp"
+        ]
+    },
+    "quant": {
+        "extension": "lightop._ext.module_quant",
+        "sources": [
+            "./csrc/kernels/per_token_quant/*.cu",
+            "./csrc/kernels/blockwise_scaling/block_scaled_cast_transpose.cu",
+            "./csrc/kernels/quantization_kernels.cu",
+            "./csrc/kernels/fake_quantize_per_affine.cu",
+            "./csrc/kernels/minimax_cp_fp8_pack.cu",
+            "./csrc/kernels/per_token_quant/binding_quant.cpp"
+        ]
+    },
+    "attention_prep": {
+        "extension": "lightop._ext.module_attention_prep",
+        "sources": [
+            "./csrc/kernels/mla/indexer_k_prepare.cu",
+            "./csrc/kernels/mla/indexer_q_prepare.cu",
+            "./csrc/kernels/mla/mla_q_absorb_concat.cu",
+            "./csrc/kernels/mla/spark_mla_rope_cat_store.cu",
+            "./csrc/kernels/rotary_positional_embedding.cu",
+            "./csrc/kernels/mha_modifined.cu",
+            "./csrc/kernels/fuse_concat_and_cast_fp8.cu",
+            "./csrc/kernels/mhc_repeat_cp_sglang.cu",
+            "./csrc/kernels/dsv41_build_swa_token_ids.cu",
+            "./csrc/kernels/dsv41_pair_partners.cu",
+            "./csrc/kernels/dsv41_pool_pairs_norm.cu",
+            "./csrc/kernels/dsv41_remap_indices_to_staging.cu",
+            "./csrc/kernels/dsv41_rope_fake_quant_store.cu",
+            "./csrc/kernels/mla/binding_attention_prep.cpp"
+        ]
+    },
+    "topk_sampling": {
+        "extension": "lightop._ext.module_topk_sampling",
+        "sources": [
+            "./csrc/kernels/topk/combine_topk_swa_indices.cu",
+            "./csrc/kernels/topk/dsv41_ragged_topk_postprocess.cu",
+            "./csrc/kernels/topk/fuse_topk_transform.cu",
+            "./csrc/kernels/topk/topk.cu",
+            "./csrc/kernels/topk/topk_ids_postprocess.cu",
+            "./csrc/kernels/convert_req_index_to_global_index.cu",
+            "./csrc/kernels/sampling/*.cu",
+            "./csrc/kernels/topk/binding_topk_sampling.cpp"
+        ]
     }
 }
