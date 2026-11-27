@@ -3,6 +3,7 @@
 
 #include "type_convert.cuh"
 #include <torch/cuda.h>
+#include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <ATen/native/cuda/MemoryAccess.cuh>
 #include <c10/cuda/CUDAMathCompat.h>
@@ -235,8 +236,84 @@ fused_add_rms_norm_kernel(
 namespace at{
 namespace native{
 
+namespace rms_opt_gfx946 {
+#if defined(__gfx946__)
+using v2f = float __attribute__((ext_vector_type(2)));
+using v2h = _Float16 __attribute__((ext_vector_type(2)));
+
+__device__ __forceinline__ v2f bf16x2_to_v2f(uint32_t packed) {
+  uint32_t lo = (packed & 0xFFFFU) << 16;
+  uint32_t hi = packed & 0xFFFF0000U;
+  return v2f{__uint_as_float(lo), __uint_as_float(hi)};
+}
+
+__device__ __forceinline__ v2f f16x2_to_v2f(uint32_t packed) {
+  __half2 h2 = __builtin_bit_cast(__half2, packed);
+  float2 f = __half22float2(h2);
+  return v2f{f.x, f.y};
+}
+
+// VOP3A RNE packed conversion (matches SQ_WAVE_MODE default RNE; never RTZ).
+__device__ __forceinline__ uint32_t v2f_to_bf16x2_rn(v2f v) {
+  uint32_t res;
+  asm("v_cvt_pk_bf16_f32 %0, %1, %2" : "=v"(res) : "v"(v[0]), "v"(v[1]));
+  return res;
+}
+
+__device__ __forceinline__ uint32_t v2f_to_f16x2_rn(v2f v) {
+  uint32_t res;
+  asm("v_cvt_pk_f16_f32 %0, %1, %2" : "=v"(res) : "v"(v[0]), "v"(v[1]));
+  return res;
+}
+
+// VOP3P 2xBF16/FP16 dot-product accumulate into FP32 (non-residual Pass 1 only).
+__device__ __forceinline__ float dot2_sq_bf16(uint32_t packed_bf16, float acc) {
+  asm("v_dot2_f32_bf16 %0, %1, %1, %0" : "+v"(acc) : "v"(packed_bf16));
+  return acc;
+}
+
+__device__ __forceinline__ float dot2_sq_f16(uint32_t packed_f16, float acc) {
+#if defined(__has_builtin) && __has_builtin(__builtin_hcu_fdot2)
+  v2h h = __builtin_bit_cast(v2h, packed_f16);
+  return __builtin_hcu_fdot2(h, h, acc, false);
+#else
+  asm("v_dot2_f32_f16 %0, %1, %1, %0" : "+v"(acc) : "v"(packed_f16));
+  return acc;
+#endif
+}
+
+// 1-Pass VALU cross-half-wave swap (dual "+v" asm per Group 1 errata R4).
+__device__ __forceinline__ float permlane16_swap_fadd(float val) {
+  float other = val;
+  asm volatile("v_permlane16_swap_b32 %0, %1" : "+v"(val), "+v"(other));
+  return val + other;
+}
+
+__device__ __forceinline__ float permlane32_swap_fadd(float val) {
+  float other = val;
+  asm volatile("v_permlane32_swap_b32 %0, %1" : "+v"(val), "+v"(other));
+  return val + other;
+}
+
+__device__ __forceinline__ v2f clamp_v2f(v2f v, float limit) {
+  return v2f{clamp_with_limit(v[0], limit), clamp_with_limit(v[1], limit)};
+}
+#endif  // defined(__gfx946__)
+}  // namespace rms_opt_gfx946
+
 template <typename T,int reducesize=C10_WARP_SIZE>
 __inline__ __device__ T WarpReduceSum_NEW(T val) {
+#if defined(__gfx946__)
+  if constexpr (std::is_same_v<T, float> && reducesize == 64) {
+    val = rms_opt_gfx946::permlane32_swap_fadd(val);
+    val = rms_opt_gfx946::permlane16_swap_fadd(val);
+#pragma unroll
+    for (int offset = 8; offset > 0; offset >>= 1) {
+      val += WARP_SHFL_DOWN(val, offset);
+    }
+    return val;
+  }
+#endif
 #pragma unroll
   for (int offset = reducesize/2; offset > 0; offset >>= 1) {
     val += WARP_SHFL_DOWN(val, offset);
@@ -269,6 +346,24 @@ __inline__ __device__ T BlockReduceSum_NEW(T val, T* shared) {
 #ifdef USE_ROCM
 template <typename T, int width>
 __inline__ __device__ T SubWarpReduceSumWithWidth(T val) {
+#if defined(__gfx946__)
+  if constexpr (std::is_same_v<T, float> && width == 64) {
+    val = rms_opt_gfx946::permlane32_swap_fadd(val);
+    val = rms_opt_gfx946::permlane16_swap_fadd(val);
+#pragma unroll
+    for (int offset = 8; offset > 0; offset >>= 1) {
+      val += __shfl_down(val, offset, width);
+    }
+    return val;
+  } else if constexpr (std::is_same_v<T, float> && width == 32) {
+    val = rms_opt_gfx946::permlane16_swap_fadd(val);
+#pragma unroll
+    for (int offset = 8; offset > 0; offset >>= 1) {
+      val += __shfl_down(val, offset, width);
+    }
+    return val;
+  }
+#endif
 #pragma unroll
   for (int offset = width / 2; offset > 0; offset >>= 1) {
     val += __shfl_down(val, offset, width);
@@ -298,6 +393,60 @@ __global__ void rms_kernel_small_hidden_multi_token(
   const int token = blockIdx.x * TokensPerBlock + token_in_block;
   const bool valid_token = token < num_tokens;
   using LoadT = at::native::memory::aligned_vector<scalar_t, Vec>;
+
+#if defined(__gfx946__)
+  if constexpr (std::is_same_v<scalar_t, at::BFloat16> || std::is_same_v<scalar_t, at::Half>) {
+    constexpr bool IS_BF16 = std::is_same_v<scalar_t, at::BFloat16>;
+    uint32_t x_raw[4];
+    float sum = 0.0f;
+    if (valid_token) {
+      const int64_t idx = static_cast<int64_t>(token) * HiddenSize + lane * Vec;
+      *(LoadT*)x_raw = *(const LoadT*)(input + idx);
+#pragma unroll
+      for (int p = 0; p < 4; ++p) {
+        if constexpr (IS_BF16) {
+          sum = rms_opt_gfx946::dot2_sq_bf16(x_raw[p], sum);
+        } else {
+          sum = rms_opt_gfx946::dot2_sq_f16(x_raw[p], sum);
+        }
+      }
+    }
+
+    sum = SubWarpReduceSumWithWidth<float, ThreadsPerToken>(sum);
+    float rstd = 0.0f;
+    if (lane == 0) {
+      rstd = c10::cuda::compat::rsqrt(sum / static_cast<float>(HiddenSize) + static_cast<float>(eps));
+    }
+    rstd = __shfl(rstd, 0, ThreadsPerToken);
+
+    if (valid_token) {
+      uint32_t w_raw[4];
+      *(LoadT*)w_raw = *(const LoadT*)(gamma + lane * Vec);
+      const rms_opt_gfx946::v2f v_rstd = {rstd, rstd};
+      const rms_opt_gfx946::v2f v_one = {1.0f, 1.0f};
+      const float limit_f = static_cast<float>(limit);
+#pragma unroll
+      for (int p = 0; p < 4; ++p) {
+        rms_opt_gfx946::v2f x_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(x_raw[p])
+                                          : rms_opt_gfx946::f16x2_to_v2f(x_raw[p]);
+        rms_opt_gfx946::v2f w_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(w_raw[p])
+                                          : rms_opt_gfx946::f16x2_to_v2f(w_raw[p]);
+        if constexpr (IS_GEMMA) {
+          w_f = w_f + v_one;
+        }
+        rms_opt_gfx946::v2f y_f = (x_f * v_rstd) * w_f;
+        if constexpr (APPLY_CLAMP) {
+          y_f = rms_opt_gfx946::clamp_v2f(y_f, limit_f);
+        }
+        x_raw[p] = IS_BF16 ? rms_opt_gfx946::v2f_to_bf16x2_rn(y_f)
+                           : rms_opt_gfx946::v2f_to_f16x2_rn(y_f);
+      }
+      const int64_t idx = static_cast<int64_t>(token) * HiddenSize + lane * Vec;
+      *(LoadT*)(output + idx) = *(LoadT*)x_raw;
+    }
+    return;
+  }
+#endif  // defined(__gfx946__)
 
   scalar_t input_vec[Vec];
   T_ACC sum = 0;
@@ -361,6 +510,70 @@ __global__ void fused_add_rms_kernel_small_hidden_multi_token(
   const int token = blockIdx.x * TokensPerBlock + token_in_block;
   const bool valid_token = token < num_tokens;
   using LoadT = at::native::memory::aligned_vector<scalar_t, Vec>;
+
+#if defined(__gfx946__)
+  if constexpr (std::is_same_v<scalar_t, at::BFloat16> || std::is_same_v<scalar_t, at::Half>) {
+    constexpr bool IS_BF16 = std::is_same_v<scalar_t, at::BFloat16>;
+    // Keep strict FP32 residual sums in v2f registers; overlap residual store with reduction.
+    rms_opt_gfx946::v2f sums[4];
+    float sum = 0.0f;
+    if (valid_token) {
+      const int64_t idx = static_cast<int64_t>(token) * HiddenSize + lane * Vec;
+      uint32_t x_raw[4];
+      uint32_t r_raw[4];
+      *(LoadT*)x_raw = *(const LoadT*)(input + idx);
+      *(LoadT*)r_raw = *(const LoadT*)(residual + idx);
+      rms_opt_gfx946::v2f var_acc = {0.0f, 0.0f};
+#pragma unroll
+      for (int p = 0; p < 4; ++p) {
+        rms_opt_gfx946::v2f x_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(x_raw[p])
+                                          : rms_opt_gfx946::f16x2_to_v2f(x_raw[p]);
+        rms_opt_gfx946::v2f r_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(r_raw[p])
+                                          : rms_opt_gfx946::f16x2_to_v2f(r_raw[p]);
+        rms_opt_gfx946::v2f s = x_f + r_f;      // v_pk_add_f32
+        sums[p] = s;
+        var_acc = var_acc + s * s;              // v_pk_fma_f32
+        r_raw[p] = IS_BF16 ? rms_opt_gfx946::v2f_to_bf16x2_rn(s)
+                           : rms_opt_gfx946::v2f_to_f16x2_rn(s);
+      }
+      sum = var_acc[0] + var_acc[1];
+      *(LoadT*)(residual + idx) = *(LoadT*)r_raw;
+    }
+
+    sum = SubWarpReduceSumWithWidth<float, ThreadsPerToken>(sum);
+    float rstd = 0.0f;
+    if (lane == 0) {
+      rstd = c10::cuda::compat::rsqrt(sum / static_cast<float>(HiddenSize) + static_cast<float>(eps));
+    }
+    rstd = __shfl(rstd, 0, ThreadsPerToken);
+
+    if (valid_token) {
+      uint32_t w_raw[4];
+      uint32_t out_raw[4];
+      *(LoadT*)w_raw = *(const LoadT*)(gamma + lane * Vec);
+      const rms_opt_gfx946::v2f v_rstd = {rstd, rstd};
+      const rms_opt_gfx946::v2f v_one = {1.0f, 1.0f};
+      const float limit_f = static_cast<float>(limit);
+#pragma unroll
+      for (int p = 0; p < 4; ++p) {
+        rms_opt_gfx946::v2f w_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(w_raw[p])
+                                          : rms_opt_gfx946::f16x2_to_v2f(w_raw[p]);
+        if constexpr (IS_GEMMA) {
+          w_f = w_f + v_one;
+        }
+        rms_opt_gfx946::v2f y_f = (sums[p] * v_rstd) * w_f;
+        if constexpr (APPLY_CLAMP) {
+          y_f = rms_opt_gfx946::clamp_v2f(y_f, limit_f);
+        }
+        out_raw[p] = IS_BF16 ? rms_opt_gfx946::v2f_to_bf16x2_rn(y_f)
+                             : rms_opt_gfx946::v2f_to_f16x2_rn(y_f);
+      }
+      const int64_t idx = static_cast<int64_t>(token) * HiddenSize + lane * Vec;
+      *(LoadT*)(input + idx) = *(LoadT*)out_raw;
+    }
+    return;
+  }
+#endif  // defined(__gfx946__)
 
   scalar_t input_vec[Vec];
   scalar_t residual_vec[Vec];
@@ -484,14 +697,81 @@ __global__ __launch_bounds__(Threads) void fused_add_rms_kernel_fp32_tiled(
   constexpr int Chunks = Hidden / (Threads * Vec);
   static_assert(Chunks > 0 && Hidden % (Threads * Vec) == 0);
   using Pack = at::native::memory::aligned_vector<scalar_t, Vec>;
-  float sums[Chunks][Vec];
-  float variance = 0.f;
   const int lane = threadIdx.x % C10_WARP_SIZE;
   const int warp = threadIdx.x / C10_WARP_SIZE;
   constexpr int Warps = Threads / C10_WARP_SIZE;
+  static_assert((Warps & (Warps - 1)) == 0 && Warps <= C10_WARP_SIZE);
   __shared__ float partial[Warps];
   __shared__ float rstd;
   const int64_t base = static_cast<int64_t>(blockIdx.x) * Hidden;
+
+#if defined(__gfx946__)
+  if constexpr (std::is_same_v<scalar_t, at::BFloat16> || std::is_same_v<scalar_t, at::Half>) {
+    constexpr bool IS_BF16 = std::is_same_v<scalar_t, at::BFloat16>;
+    rms_opt_gfx946::v2f sums[Chunks][4];
+    rms_opt_gfx946::v2f var_acc = {0.0f, 0.0f};
+#pragma unroll
+    for (int c = 0; c < Chunks; ++c) {
+      const int col = (c * Threads + threadIdx.x) * Vec;
+      uint32_t x_raw[4];
+      uint32_t r_raw[4];
+      *(Pack*)x_raw = *reinterpret_cast<const Pack*>(input + base + col);
+      *(Pack*)r_raw = *reinterpret_cast<const Pack*>(residual + base + col);
+#pragma unroll
+      for (int p = 0; p < 4; ++p) {
+        rms_opt_gfx946::v2f x_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(x_raw[p])
+                                          : rms_opt_gfx946::f16x2_to_v2f(x_raw[p]);
+        rms_opt_gfx946::v2f r_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(r_raw[p])
+                                          : rms_opt_gfx946::f16x2_to_v2f(r_raw[p]);
+        rms_opt_gfx946::v2f s = x_f + r_f;      // v_pk_add_f32
+        sums[c][p] = s;
+        var_acc = var_acc + s * s;              // v_pk_fma_f32
+        r_raw[p] = IS_BF16 ? rms_opt_gfx946::v2f_to_bf16x2_rn(s)
+                           : rms_opt_gfx946::v2f_to_f16x2_rn(s);
+      }
+      *reinterpret_cast<Pack*>(residual + base + col) = *(Pack*)r_raw;
+    }
+    float variance = var_acc[0] + var_acc[1];
+    variance = SubWarpReduceSumWithWidth<float, C10_WARP_SIZE>(variance);
+    if (lane == 0) partial[warp] = variance;
+    __syncthreads();
+    if (warp == 0) {
+      float total = lane < Warps ? partial[lane] : 0.f;
+      total = SubWarpReduceSumWithWidth<float, Warps>(total);
+      if (lane == 0) rstd = c10::cuda::compat::rsqrt(total / Hidden + eps);
+    }
+    __syncthreads();
+    const float scale = rstd;
+    const rms_opt_gfx946::v2f v_scale = {scale, scale};
+    const rms_opt_gfx946::v2f v_one = {1.0f, 1.0f};
+#pragma unroll
+    for (int c = 0; c < Chunks; ++c) {
+      const int col = (c * Threads + threadIdx.x) * Vec;
+      uint32_t w_raw[4];
+      uint32_t out_raw[4];
+      *(Pack*)w_raw = *reinterpret_cast<const Pack*>(weight + col);
+#pragma unroll
+      for (int p = 0; p < 4; ++p) {
+        rms_opt_gfx946::v2f w_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(w_raw[p])
+                                          : rms_opt_gfx946::f16x2_to_v2f(w_raw[p]);
+        if constexpr (IsGemma) {
+          w_f = w_f + v_one;
+        }
+        rms_opt_gfx946::v2f y_f = (sums[c][p] * v_scale) * w_f;
+        if constexpr (Clamp) {
+          y_f = rms_opt_gfx946::clamp_v2f(y_f, limit);
+        }
+        out_raw[p] = IS_BF16 ? rms_opt_gfx946::v2f_to_bf16x2_rn(y_f)
+                             : rms_opt_gfx946::v2f_to_f16x2_rn(y_f);
+      }
+      *reinterpret_cast<Pack*>(input + base + col) = *(Pack*)out_raw;
+    }
+    return;
+  }
+#endif  // defined(__gfx946__)
+
+  float sums[Chunks][Vec];
+  float variance = 0.f;
 #pragma unroll
   for (int c = 0; c < Chunks; ++c) {
     const int col = (c * Threads + threadIdx.x) * Vec;
@@ -509,7 +789,7 @@ __global__ __launch_bounds__(Threads) void fused_add_rms_kernel_fp32_tiled(
   __syncthreads();
   if (warp == 0) {
     float total = lane < Warps ? partial[lane] : 0.f;
-    total = SubWarpReduceSumWithWidth<float, C10_WARP_SIZE>(total);
+    total = SubWarpReduceSumWithWidth<float, Warps>(total);
     if (lane == 0) rstd = c10::cuda::compat::rsqrt(total / Hidden + eps);
   }
   __syncthreads();
@@ -542,45 +822,105 @@ __global__ void fused_add_rms_kernel_opt(scalar_t* input,scalar_t* residual,scal
   __shared__ T_ACC s_rstd;
   using LoadT = at::native::memory::aligned_vector<scalar_t, Vec>;
   int i=blockIdx.x;
-  int j=threadIdx.x;
+  const int j=threadIdx.x;
+  const int tcol=cols/Vec;
   for(; i < num_tokens; i += gridDim.x){
+        const int64_t idx = (static_cast<int64_t>(i) * tcol + j) * Vec;
+
+#if defined(__gfx946__)
+        if constexpr ((Vec == 8 || Vec == 16) &&
+                      (std::is_same_v<scalar_t, at::BFloat16> || std::is_same_v<scalar_t, at::Half>)) {
+          constexpr bool IS_BF16 = std::is_same_v<scalar_t, at::BFloat16>;
+          constexpr int Pairs = Vec / 2;
+          rms_opt_gfx946::v2f sums[Pairs];
+          float val = 0.0f;
+          if (j < tcol) {
+            uint32_t x_raw[Pairs];
+            uint32_t r_raw[Pairs];
+            *(LoadT*)x_raw = *(const LoadT*)(input + idx);
+            *(LoadT*)r_raw = *(const LoadT*)(residual + idx);
+            rms_opt_gfx946::v2f var_acc = {0.0f, 0.0f};
+#pragma unroll
+            for (int p = 0; p < Pairs; ++p) {
+              rms_opt_gfx946::v2f x_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(x_raw[p])
+                                                : rms_opt_gfx946::f16x2_to_v2f(x_raw[p]);
+              rms_opt_gfx946::v2f r_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(r_raw[p])
+                                                : rms_opt_gfx946::f16x2_to_v2f(r_raw[p]);
+              rms_opt_gfx946::v2f s = x_f + r_f;      // v_pk_add_f32
+              sums[p] = s;
+              var_acc = var_acc + s * s;              // v_pk_fma_f32
+              r_raw[p] = IS_BF16 ? rms_opt_gfx946::v2f_to_bf16x2_rn(s)
+                                 : rms_opt_gfx946::v2f_to_f16x2_rn(s);
+            }
+            val = var_acc[0] + var_acc[1];
+            *(LoadT*)(residual + idx) = *(LoadT*)r_raw;
+          }
+          val = BlockReduceSum_NEW<float, block_size>(val, val_shared);
+          if (j == 0) s_rstd = c10::cuda::compat::rsqrt(val / static_cast<float>(cols) + static_cast<float>(eps));
+          __syncthreads();
+          const float trstd = s_rstd;
+          if (j < tcol) {
+            uint32_t w_raw[Pairs];
+            uint32_t out_raw[Pairs];
+            *(LoadT*)w_raw = *(const LoadT*)(gamma + static_cast<int64_t>(j) * Vec);
+            const rms_opt_gfx946::v2f v_rstd = {trstd, trstd};
+            const rms_opt_gfx946::v2f v_one = {1.0f, 1.0f};
+            const float limit_f = static_cast<float>(limit);
+#pragma unroll
+            for (int p = 0; p < Pairs; ++p) {
+              rms_opt_gfx946::v2f w_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(w_raw[p])
+                                                : rms_opt_gfx946::f16x2_to_v2f(w_raw[p]);
+              if constexpr (IS_GEMMA) {
+                w_f = w_f + v_one;
+              }
+              rms_opt_gfx946::v2f y_f = (sums[p] * v_rstd) * w_f;
+              if constexpr (APPLY_CLAMP) {
+                y_f = rms_opt_gfx946::clamp_v2f(y_f, limit_f);
+              }
+              out_raw[p] = IS_BF16 ? rms_opt_gfx946::v2f_to_bf16x2_rn(y_f)
+                                   : rms_opt_gfx946::v2f_to_f16x2_rn(y_f);
+            }
+            *(LoadT*)(input + idx) = *(LoadT*)out_raw;
+          }
+          continue;
+        }
+#endif  // defined(__gfx946__)
+
         T_ACC val=0;
-        int tcol=cols/Vec;
-        scalar_t intput_vec[Vec];
-        scalar_t residual_vec[Vec];
         T_ACC summed_vec[Vec];
-        T_ACC trstd;
-        int64_t idx = i * tcol + j;
-        idx*=Vec;
         if (j < tcol) {
-          *(LoadT*)intput_vec = *(LoadT*)(input+idx);
-          *(LoadT*)residual_vec = *(LoadT*)(residual+idx);
+          scalar_t intput_vec[Vec];
+          scalar_t residual_vec[Vec];
+          *(LoadT*)intput_vec = *(const LoadT*)(input+idx);
+          *(LoadT*)residual_vec = *(const LoadT*)(residual+idx);
           #pragma unroll
           for (int ii = 0; ii < Vec; ii++) {
             summed_vec[ii] = static_cast<T_ACC>(to_float(intput_vec[ii])) +
                              static_cast<T_ACC>(to_float(residual_vec[ii]));
             val += summed_vec[ii] * summed_vec[ii];
+            from_float<scalar_t>(residual_vec[ii], summed_vec[ii]);
           }
+          *(LoadT*)(residual+idx)=*(LoadT*)residual_vec;
         }
         val = BlockReduceSum_NEW<T_ACC,block_size>(val,val_shared);
         if (j == 0) s_rstd=c10::cuda::compat::rsqrt(val/cols + eps);
         __syncthreads();
-        trstd=s_rstd;
+        const T_ACC trstd=s_rstd;
         if (j < tcol) {
+          scalar_t weight_vec[Vec];
+          scalar_t out_vec[Vec];
+          *(LoadT*)weight_vec = *(const LoadT*)(gamma + static_cast<int64_t>(j) * Vec);
           #pragma unroll
           for(int ii=0;ii<Vec;ii++){
-            int jj=j*Vec+ii;
-            T_ACC w_val = to_float(gamma[jj]);
+            T_ACC w_val = to_float(weight_vec[ii]);
             if constexpr (IS_GEMMA) { w_val += 1.0f; }
             T_ACC normalized = summed_vec[ii] * trstd * w_val;
             if constexpr (APPLY_CLAMP) {
               normalized = clamp_with_limit(normalized, limit);
             }
-            from_float<scalar_t>(residual_vec[ii], summed_vec[ii]);
-            from_float<scalar_t>(intput_vec[ii], normalized);
+            from_float<scalar_t>(out_vec[ii], normalized);
           }
-          *(LoadT*)(residual+idx)=*(LoadT*)residual_vec;
-          *(LoadT*)(input+idx)=*(LoadT*)intput_vec;
+          *(LoadT*)(input+idx)=*(LoadT*)out_vec;
         }
   }
 }
@@ -591,19 +931,68 @@ __global__ void fused_rms_kernel_opt(scalar_t* input,scalar_t* output,scalar_t* 
   constexpr int share_size=block_size/C10_WARP_SIZE;
   __shared__ T_ACC val_shared[share_size];
   __shared__ T_ACC s_rstd;
+  using LoadT = at::native::memory::aligned_vector<scalar_t, Vec>;
 
   int i=blockIdx.x;
-  int j=threadIdx.x;
+  const int j=threadIdx.x;
+  const int tcol=cols/Vec;
   for(; i < num_tokens; i += gridDim.x){
+      const int64_t idx = (static_cast<int64_t>(i) * tcol + j) * Vec;
+
+#if defined(__gfx946__)
+      if constexpr ((Vec == 8 || Vec == 16) &&
+                    (std::is_same_v<scalar_t, at::BFloat16> || std::is_same_v<scalar_t, at::Half>)) {
+        constexpr bool IS_BF16 = std::is_same_v<scalar_t, at::BFloat16>;
+        constexpr int Pairs = Vec / 2;
+        uint32_t x_raw[Pairs];
+        float val = 0.0f;
+        if (j < tcol) {
+          *(LoadT*)x_raw = *(const LoadT*)(input + idx);
+#pragma unroll
+          for (int p = 0; p < Pairs; ++p) {
+            if constexpr (IS_BF16) {
+              val = rms_opt_gfx946::dot2_sq_bf16(x_raw[p], val);
+            } else {
+              val = rms_opt_gfx946::dot2_sq_f16(x_raw[p], val);
+            }
+          }
+        }
+        val = BlockReduceSum_NEW<float, block_size>(val, val_shared);
+        if (j == 0) s_rstd = c10::cuda::compat::rsqrt(val / static_cast<float>(cols) + static_cast<float>(eps));
+        __syncthreads();
+        const float trstd = s_rstd;
+        if (j < tcol) {
+          uint32_t w_raw[Pairs];
+          *(LoadT*)w_raw = *(const LoadT*)(gamma + static_cast<int64_t>(j) * Vec);
+          const rms_opt_gfx946::v2f v_rstd = {trstd, trstd};
+          const rms_opt_gfx946::v2f v_one = {1.0f, 1.0f};
+          const float limit_f = static_cast<float>(limit);
+#pragma unroll
+          for (int p = 0; p < Pairs; ++p) {
+            rms_opt_gfx946::v2f x_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(x_raw[p])
+                                              : rms_opt_gfx946::f16x2_to_v2f(x_raw[p]);
+            rms_opt_gfx946::v2f w_f = IS_BF16 ? rms_opt_gfx946::bf16x2_to_v2f(w_raw[p])
+                                              : rms_opt_gfx946::f16x2_to_v2f(w_raw[p]);
+            if constexpr (IS_GEMMA) {
+              w_f = w_f + v_one;
+            }
+            rms_opt_gfx946::v2f y_f = (x_f * v_rstd) * w_f;
+            if constexpr (APPLY_CLAMP) {
+              y_f = rms_opt_gfx946::clamp_v2f(y_f, limit_f);
+            }
+            x_raw[p] = IS_BF16 ? rms_opt_gfx946::v2f_to_bf16x2_rn(y_f)
+                               : rms_opt_gfx946::v2f_to_f16x2_rn(y_f);
+          }
+          *(LoadT*)(output + idx) = *(LoadT*)x_raw;
+        }
+        continue;
+      }
+#endif  // defined(__gfx946__)
+
       T_ACC val=0;
-      int tcol=cols/Vec;
-      using LoadT = at::native::memory::aligned_vector<scalar_t, Vec>;
       scalar_t intput_vec[Vec];
-      T_ACC trstd;
-      int64_t idx = i * tcol + j;
-      idx*=Vec;
       if (j < tcol) {
-        *(LoadT*)intput_vec = *(LoadT*)(input+idx);
+        *(LoadT*)intput_vec = *(const LoadT*)(input+idx);
         #pragma unroll
         for (int ii = 0; ii < Vec; ii++) {
           val += static_cast<T_ACC>(intput_vec[ii])*static_cast<T_ACC>(intput_vec[ii]);
@@ -612,12 +1001,13 @@ __global__ void fused_rms_kernel_opt(scalar_t* input,scalar_t* output,scalar_t* 
       val = BlockReduceSum_NEW<T_ACC,block_size>(val,val_shared);
       if (j == 0) s_rstd=c10::cuda::compat::rsqrt(val/cols + eps);
       __syncthreads();
-      trstd=s_rstd;
+      const T_ACC trstd=s_rstd;
       if (j < tcol) {
+        scalar_t weight_vec[Vec];
+        *(LoadT*)weight_vec = *(const LoadT*)(gamma + static_cast<int64_t>(j) * Vec);
         #pragma unroll
         for(int ii=0;ii<Vec;ii++){
-          int jj=j*Vec+ii;
-          T_ACC w_val = static_cast<T_ACC>(gamma[jj]);
+          T_ACC w_val = static_cast<T_ACC>(weight_vec[ii]);
           if constexpr (IS_GEMMA) { w_val += 1.0f; }
           T_ACC normalized = static_cast<T_ACC>(intput_vec[ii]) * trstd * w_val;
           if constexpr (APPLY_CLAMP) {
@@ -725,16 +1115,20 @@ void rms_norm_opt_impl(torch::Tensor& out,    // [..., hidden_size]
       limit == -1.0 || (std::isfinite(limit) && limit >= 0.0),
       "limit must be -1 (disabled) or a finite non-negative value");
   int hidden_size = input.size(-1);
+  TORCH_CHECK(hidden_size > 0, "hidden_size must be positive");
   int num_tokens = input.numel() / hidden_size;
-  int grid = num_tokens;
-  if(num_tokens == 288) grid = 256;
+  if (num_tokens == 0) return;
   const at::cuda::OptionalCUDAGuard device_guard(device_of(input));
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  int grid = num_tokens;
+  if (num_tokens == 288 &&
+      at::cuda::getCurrentDeviceProperties()->multiProcessorCount <= 128) {
+    grid = 256;
+  }
   auto inp_ptr = reinterpret_cast<std::uintptr_t>(input.data_ptr());
   auto out_ptr = reinterpret_cast<std::uintptr_t>(out.data_ptr());
   auto wt_ptr = reinterpret_cast<std::uintptr_t>(weight.data_ptr());
-  bool ptrs_are_aligned =inp_ptr % 16 == 0  && wt_ptr % 16 == 0;
-  bool small_ptrs_are_aligned = ptrs_are_aligned && out_ptr % 16 == 0;
+  bool ptrs_are_aligned = (inp_ptr % 16 == 0) && (out_ptr % 16 == 0) && (wt_ptr % 16 == 0);
   if(hidden_size%16==0&&hidden_size<=16384&&ptrs_are_aligned){
   AT_DISPATCH_FLOATING_TYPES_AND2(
     at::ScalarType::Half,
@@ -748,9 +1142,8 @@ void rms_norm_opt_impl(torch::Tensor& out,    // [..., hidden_size]
       scalar_t* out_data   =  out.expect_contiguous()->data_ptr<scalar_t>();
       scalar_t* weight_data= weight.expect_contiguous()->data_ptr<scalar_t>();
 #ifdef USE_ROCM
-      if constexpr (!IS_GEMMA && sizeof(scalar_t) == 2) {
-        if (small_ptrs_are_aligned &&
-            launch_rms_small_hidden_multi_token<scalar_t, T_ACC, IS_GEMMA, APPLY_CLAMP>(
+      if constexpr (sizeof(scalar_t) == 2) {
+        if (launch_rms_small_hidden_multi_token<scalar_t, T_ACC, IS_GEMMA, APPLY_CLAMP>(
                 self_data, out_data, weight_data, hidden_size, eps,
                 num_tokens, static_cast<T_ACC>(limit), stream)) {
           return;
@@ -938,10 +1331,13 @@ void fused_add_rms_norm_opt_impl(torch::Tensor& input,     // [..., hidden_size]
   TORCH_CHECK(hidden_size > 0, "hidden_size must be positive");
   int num_tokens = input.numel() / hidden_size;
   if (num_tokens == 0) return;
-  int grid = num_tokens;
-  if(num_tokens == 288) grid = 256;
   const at::cuda::OptionalCUDAGuard device_guard(device_of(input));
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  int grid = num_tokens;
+  if (num_tokens == 288 &&
+      at::cuda::getCurrentDeviceProperties()->multiProcessorCount <= 128) {
+    grid = 256;
+  }
   auto inp_ptr = reinterpret_cast<std::uintptr_t>(input.data_ptr());
   auto res_ptr = reinterpret_cast<std::uintptr_t>(residual.data_ptr());
   auto wt_ptr = reinterpret_cast<std::uintptr_t>(weight.data_ptr());
@@ -974,7 +1370,7 @@ void fused_add_rms_norm_opt_impl(torch::Tensor& input,     // [..., hidden_size]
             return;
           }
         }
-        if constexpr (!IS_GEMMA && sizeof(scalar_t) == 2) {
+        if constexpr (sizeof(scalar_t) == 2) {
           if (launch_fused_add_rms_small_hidden_multi_token<
                   scalar_t, T_ACC, IS_GEMMA, APPLY_CLAMP>(
                   self_data, other_data, weight_data, hidden_size, eps,
