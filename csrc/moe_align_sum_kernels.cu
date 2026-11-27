@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/all.h>
 #include <cub/cub.cuh>
@@ -9,6 +10,7 @@
 #include <ATen/cuda/Atomic.cuh>
 #include <cub/block/block_scan.cuh>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 #define WARP_SIZE 1
 
@@ -20,373 +22,460 @@ template <typename T, int N> struct alignas(sizeof(T) * N) Vector {
 namespace at {
 namespace native {
 
-/* numel <= 256 */
-template <typename scalar_t, int smem_size, int TOPK, bool Is_EP,int CUB_BLOCK_THREADS>
+// On gfx946 (128 KB LDS / CU), replicate the per-block expert histogram across
+// multiple bank-padded copies (stride = smem_size + 1) to reduce LDS atomicAdd
+// contention under skewed MoE routing during both count and scatter passes.
+// Non-gfx946 architectures keep a single copy to stay within 64 KB LDS budgets.
+template <int SMEM_SIZE>
+__device__ __host__ constexpr int hcu_align_hist_copies() {
+#if defined(__gfx946__)
+  return (SMEM_SIZE <= 256) ? 8 : 4;
+#else
+  return 1;
+#endif
+}
+
+__device__ __forceinline__ void fill_sorted_token_ids_vec(
+    int32_t* __restrict__ dst,
+    int64_t len,
+    int32_t fill_val,
+    size_t tid,
+    size_t stride) {
+  if (len <= 0) {
+    return;
+  }
+  if ((reinterpret_cast<uintptr_t>(dst) & 0xFU) == 0) {
+    const int64_t vec_len = len >> 2;
+    int4* __restrict__ dst_vec = reinterpret_cast<int4*>(dst);
+    const int4 v = make_int4(fill_val, fill_val, fill_val, fill_val);
+    for (size_t i = tid; i < static_cast<size_t>(vec_len); i += stride) {
+      dst_vec[i] = v;
+    }
+    const int64_t tail_base = vec_len << 2;
+    for (int64_t i = tail_base + static_cast<int64_t>(tid); i < len;
+         i += static_cast<int64_t>(stride)) {
+      dst[i] = fill_val;
+    }
+  } else {
+    for (size_t i = tid; i < static_cast<size_t>(len); i += stride) {
+      dst[i] = fill_val;
+    }
+  }
+}
+
+__device__ __forceinline__ int32_t align_up_block(int32_t count, int32_t block_size) {
+  if ((block_size & (block_size - 1)) == 0) {
+    return (count + block_size - 1) & ~(block_size - 1);
+  }
+  return CEILDIV(count, block_size) * block_size;
+}
+
+__device__ __forceinline__ void write_expert_block_ids(
+    int32_t* __restrict__ expert_ids,
+    int32_t start,
+    int32_t end,
+    int32_t block_size,
+    int32_t value) {
+  if (start >= end) {
+    return;
+  }
+  int32_t block_begin;
+  int32_t block_end;
+  if ((block_size & (block_size - 1)) == 0) {
+    const int32_t shift = __ffs(block_size) - 1;
+    block_begin = start >> shift;
+    block_end = end >> shift;
+  } else {
+    block_begin = start / block_size;
+    block_end = end / block_size;
+  }
+  for (int32_t b = block_begin; b < block_end; ++b) {
+    expert_ids[b] = value;
+  }
+}
+
+/* numel <= smem_size */
+template <typename scalar_t, int smem_size, bool Is_EP, int CUB_BLOCK_THREADS>
 __global__ void moe_align_block_size_kernel_opt_fused_small_size(
     const scalar_t* __restrict__ topk_ids,
     int32_t* __restrict__ sorted_token_ids, int32_t* __restrict__ expert_ids,
     int32_t* __restrict__ total_tokens_post_pad, int32_t num_experts,
     int32_t padded_num_experts, int32_t experts_per_warp, int32_t block_size,
     size_t numel, int32_t* __restrict__ expert_map,
-    bool* __restrict__ expert_mask, int32_t* __restrict__ num_local_tokens, int32_t sorted_token_ids_len,bool Is_fuse_fill) {
-  const int topk_numel = numel;
-  if (num_local_tokens != nullptr) {
-    if (num_local_tokens[0] == 0) {
-      return;
-    } else {
-      numel = num_local_tokens[0] * TOPK;
-    }
-  }
+    bool* __restrict__ expert_mask, int32_t* __restrict__ num_local_tokens,
+    int64_t sorted_token_ids_len, bool Is_fuse_fill, int32_t topk) {
+  const int32_t topk_numel = static_cast<int32_t>(numel);
   const size_t tid = threadIdx.x;
   const size_t stride = blockDim.x;
-  if(Is_fuse_fill){
-      for (int i = tid; i < sorted_token_ids_len; i += stride) {
-         sorted_token_ids[i] = topk_numel;
+  if (num_local_tokens != nullptr) {
+    const int32_t local_tok = num_local_tokens[0];
+    if (local_tok == 0) {
+      if (tid == 0) {
+        *total_tokens_post_pad = 0;
+      }
+      return;
     }
+    numel = static_cast<size_t>(local_tok) * static_cast<size_t>(topk);
+  }
+  if (Is_fuse_fill) {
+    fill_sorted_token_ids_vec(
+        sorted_token_ids, sorted_token_ids_len, topk_numel, tid, stride);
   }
 
   __shared__ int32_t shared_counts[smem_size + 1];
-  
+
   // CUB Scan 需要额外的共享内存
   typedef cub::BlockScan<int32_t, CUB_BLOCK_THREADS> BlockScan;
   __shared__ typename BlockScan::TempStorage temp_storage;
-  // 保存总和
-  // int32_t block_total_sum;
 
   __shared__ int32_t local_expert_map[smem_size];
 
-  //初始化
-  for (int i = tid; i < num_experts; i += stride) {
+  // 初始化
+  for (int i = static_cast<int>(tid); i < num_experts; i += static_cast<int>(stride)) {
     shared_counts[i] = 0;
   }
-   if (expert_map != nullptr) {
-      if(tid < num_experts) local_expert_map[tid] = expert_map[tid];
+  if (expert_map != nullptr) {
+    if (tid < static_cast<size_t>(num_experts)) {
+      local_expert_map[tid] = expert_map[tid];
     }
-  // // 单独处理最后一个元素
-  // if (tid == 0) {
-  //   shared_counts[num_experts] = 0;
-  // }
+  }
   __syncthreads();
 
-  //直方图统计
+  // 直方图统计
   bool is_valid_expert = true;
   int expert_id = 0;
 
-  if(tid < numel){
-      expert_id = topk_ids[tid];
-      if (expert_map) {
-          if (local_expert_map[expert_id] == -1) {
-              is_valid_expert = false;
-          }
-      }
-
-      if constexpr(Is_EP) {
-          if (is_valid_expert) {
-              atomicAdd(&shared_counts[expert_id], 1);
-          }
-      } else {
-          atomicAdd(&shared_counts[expert_id], 1);
-      }
-  }
-  __syncthreads();
-
-  // Padding 
-  if (threadIdx.x < num_experts) {
-    int expert_count = shared_counts[threadIdx.x];
-    // (a + b - 1) & ~(b - 1)
-    shared_counts[threadIdx.x] = (expert_count + block_size - 1) & ~(block_size - 1);
-  }
-  
-  __syncthreads(); 
-
-  //执行 CUB 扫描
-  int32_t my_padded_count = (threadIdx.x < num_experts) ? shared_counts[threadIdx.x] : 0;
-  int32_t exclusive_prefix_sum = 0;
-  cub::Sum scan_op;
-
-  BlockScan(temp_storage).ExclusiveScan(
-      my_padded_count,      
-      exclusive_prefix_sum,  
-      0,                     
-      scan_op                
-  );
-  // 总和等于最后一个线程的排他和+自己padd的值
-  if (tid == CUB_BLOCK_THREADS - 1) {
-    *total_tokens_post_pad = exclusive_prefix_sum + my_padded_count;
-     shared_counts[num_experts] = exclusive_prefix_sum + my_padded_count;
-  }
-
-  //__syncthreads();
-  if (threadIdx.x < num_experts) {
-    shared_counts[threadIdx.x] = exclusive_prefix_sum;
-  }
-  __syncthreads(); 
-  if (threadIdx.x < num_experts) {
-    for (int i = shared_counts[threadIdx.x]; i < shared_counts[threadIdx.x + 1];
-         i += block_size) {
-      if (expert_map != nullptr) {
-        expert_ids[i / block_size] = local_expert_map[threadIdx.x];
-      } else {
-        expert_ids[i / block_size] = threadIdx.x;
-      }
+  if (tid < numel) {
+    expert_id = static_cast<int>(topk_ids[tid]);
+    if (expert_map != nullptr && local_expert_map[expert_id] == -1) {
+      is_valid_expert = false;
     }
-  }
-  __syncthreads(); 
-  if(tid < numel){
-      if constexpr(Is_EP){
-          if(is_valid_expert){
-              int32_t rank_post_pad = atomicAdd(&shared_counts[expert_id], 1); 
-              sorted_token_ids[rank_post_pad] = tid;
-          }
-      }else{
-              int32_t rank_post_pad = atomicAdd(&shared_counts[expert_id], 1);
-              sorted_token_ids[rank_post_pad] = tid;
-      }
-       if (expert_mask) expert_mask[tid] = is_valid_expert;
-  }
-}
-template <typename scalar_t, int smem_size, int TOPK, int CUB_BLOCK_THREADS>
-__global__ void moe_align_block_size_kernel_opt_fused_cub(
-    const scalar_t *__restrict__ topk_ids,
-    int32_t *__restrict__ sorted_token_ids, int32_t *__restrict__ expert_ids,
-    int32_t *__restrict__ total_tokens_post_pad, int32_t num_experts,
-    int32_t padded_num_experts, int32_t experts_per_warp, int32_t block_size,
-    size_t numel, int32_t *__restrict__ expert_map,
-    bool *__restrict__ expert_mask, int32_t *__restrict__ num_local_tokens,
-    bool Is_EP, int32_t sorted_token_ids_len, bool Is_fuse_fill) {
 
-  const int topk_numel = numel;
-  if (num_local_tokens != nullptr) {
-    if (num_local_tokens[0] == 0) {
-      return;
-    } else {
-      numel = num_local_tokens[0] * TOPK;
-    }
-  }
-  const size_t tid = threadIdx.x;
-  const size_t stride = blockDim.x;
-
-  if (Is_fuse_fill) {
-    for (int i = tid; i < sorted_token_ids_len; i += stride) {
-      sorted_token_ids[i] = topk_numel;
-    }
-  }
-
-  __shared__ int32_t shared_counts[smem_size + 1];
-  typedef cub::BlockScan<int32_t, CUB_BLOCK_THREADS> BlockScan;
-  __shared__ typename BlockScan::TempStorage temp_storage;
-
-  for (int i = tid; i <= num_experts; i += stride) {
-    shared_counts[i] = 0;
-  }
-
-  __syncthreads();
-
-  for (size_t i = tid; i < numel; i += stride) {
-    int expert_id = topk_ids[i];
-    // EP
-    if (Is_EP) {
-      if (expert_map[expert_id] != -1) {
+    if constexpr (Is_EP) {
+      if (is_valid_expert) {
         atomicAdd(&shared_counts[expert_id], 1);
-        if (expert_mask) expert_mask[i] = true;
-      } else {
-        if (expert_mask) expert_mask[i] = false;
       }
     } else {
       atomicAdd(&shared_counts[expert_id], 1);
-      if (expert_mask) {
-        if (expert_map && expert_map[expert_id] == -1) {
-          expert_mask[i] = false;
-        } else {
-          expert_mask[i] = true;
-        }
-      }
     }
   }
-
   __syncthreads();
 
-
-  if (threadIdx.x < num_experts) {
-    int expert_count = shared_counts[threadIdx.x];
-    shared_counts[threadIdx.x] = ((expert_count + block_size - 1) / block_size) * block_size;
+  // Padding & 执行 CUB 扫描
+  int32_t my_padded_count = 0;
+  if (tid < static_cast<size_t>(num_experts)) {
+    my_padded_count = align_up_block(shared_counts[tid], block_size);
   }
-  __syncthreads();
-
-
-  int32_t my_padded_count = (threadIdx.x < num_experts) ? shared_counts[threadIdx.x] : 0;
   int32_t exclusive_prefix_sum = 0;
   cub::Sum scan_op;
 
   BlockScan(temp_storage).ExclusiveScan(
-      my_padded_count,      
-      exclusive_prefix_sum,  
-      0,                     
-      scan_op                
-  );
-  // 总和等于最后一个线程的排他和+自己padd的值
-  if (tid == num_experts - 1) {
-    *total_tokens_post_pad = exclusive_prefix_sum + my_padded_count;
-     shared_counts[num_experts] = exclusive_prefix_sum + my_padded_count;
+      my_padded_count,
+      exclusive_prefix_sum,
+      0,
+      scan_op);
+
+  if (tid == CUB_BLOCK_THREADS - 1) {
+    const int32_t total = exclusive_prefix_sum + my_padded_count;
+    *total_tokens_post_pad = total;
+    shared_counts[num_experts] = total;
   }
 
-
-  if (threadIdx.x < num_experts) {
-    shared_counts[threadIdx.x] = exclusive_prefix_sum;
-  }
-
-
-  __syncthreads();
-
-  if (threadIdx.x < num_experts) {
-    for (int i = shared_counts[threadIdx.x]; i < shared_counts[threadIdx.x + 1];
-         i += block_size) {
-      if (expert_map != nullptr) {
-        expert_ids[i / block_size] = expert_map[threadIdx.x];
-      } else {
-        expert_ids[i / block_size] = threadIdx.x;
-      }
-    }
+  if (tid < static_cast<size_t>(num_experts)) {
+    shared_counts[tid] = exclusive_prefix_sum;
   }
   __syncthreads();
-  for (size_t i = tid; i < numel; i += stride) {
-    int32_t expert_id = topk_ids[i];
-    if (Is_EP) {
-      if (expert_map[expert_id] != -1) {
+  if (tid < static_cast<size_t>(num_experts)) {
+    const int32_t mapped =
+        (expert_map != nullptr) ? local_expert_map[tid] : static_cast<int32_t>(tid);
+    write_expert_block_ids(
+        expert_ids, shared_counts[tid], shared_counts[tid + 1], block_size, mapped);
+  }
+  __syncthreads();
+  if (tid < numel) {
+    if constexpr (Is_EP) {
+      if (is_valid_expert) {
         int32_t rank_post_pad = atomicAdd(&shared_counts[expert_id], 1);
-        sorted_token_ids[rank_post_pad] = i;
+        sorted_token_ids[rank_post_pad] = static_cast<int32_t>(tid);
       }
     } else {
       int32_t rank_post_pad = atomicAdd(&shared_counts[expert_id], 1);
-      sorted_token_ids[rank_post_pad] = i;
+      sorted_token_ids[rank_post_pad] = static_cast<int32_t>(tid);
+    }
+    if (expert_mask != nullptr) {
+      expert_mask[tid] = is_valid_expert;
     }
   }
 }
-template <typename scalar_t, int seme_size, int TOPK, int CUB_BLOCK_THREADS>
-__global__ void moe_align_block_size_kernel_opt_cub(
-    const scalar_t *__restrict__ topk_ids,
-    int32_t *__restrict__ sorted_token_ids, int32_t *__restrict__ expert_ids,
-    int32_t *__restrict__ total_tokens_post_pad, int32_t num_experts,
+
+template <typename scalar_t, int smem_size, int CUB_BLOCK_THREADS>
+__global__ void moe_align_block_size_kernel_opt_fused_cub(
+    const scalar_t* __restrict__ topk_ids,
+    int32_t* __restrict__ sorted_token_ids, int32_t* __restrict__ expert_ids,
+    int32_t* __restrict__ total_tokens_post_pad, int32_t num_experts,
     int32_t padded_num_experts, int32_t experts_per_warp, int32_t block_size,
-    size_t numel, int32_t *__restrict__ cumsum,
-    int32_t *__restrict__ expert_map, bool *__restrict__ expert_mask,
-    int32_t *__restrict__ num_local_tokens, bool Is_EP, int32_t sorted_token_ids_len, bool Is_fuse_fill,
-    int32_t *__restrict__ global_count 
-) {
-    const int topk_numel = numel;
-
-    size_t effective_numel = numel;
-    if (num_local_tokens != nullptr) {
-        if (num_local_tokens[0] == 0) {
-            return;
-        } else {
-            effective_numel = num_local_tokens[0] * TOPK;
-        }
+    size_t numel, int32_t* __restrict__ expert_map,
+    bool* __restrict__ expert_mask, int32_t* __restrict__ num_local_tokens,
+    bool Is_EP, int64_t sorted_token_ids_len, bool Is_fuse_fill, int32_t topk) {
+  static_assert(CUB_BLOCK_THREADS >= smem_size,
+                "CUB_BLOCK_THREADS must be >= smem_size");
+  const int32_t topk_numel = static_cast<int32_t>(numel);
+  const size_t tid = threadIdx.x;
+  const size_t stride = blockDim.x;
+  if (num_local_tokens != nullptr) {
+    const int32_t local_tok = num_local_tokens[0];
+    if (local_tok == 0) {
+      if (tid == 0) {
+        *total_tokens_post_pad = 0;
+      }
+      return;
     }
+    numel = static_cast<size_t>(local_tok) * static_cast<size_t>(topk);
+  }
 
-    const size_t global_tid = blockIdx.x * blockDim.x + threadIdx.x;
-    const size_t global_stride = blockDim.x * gridDim.x;
-    const int tid = threadIdx.x;
+  if (Is_fuse_fill) {
+    fill_sorted_token_ids_vec(
+        sorted_token_ids, sorted_token_ids_len, topk_numel, tid, stride);
+  }
 
-    __shared__ int32_t shared_counts[seme_size + 1];
+  constexpr int HIST_COPIES = hcu_align_hist_copies<smem_size>();
+  constexpr int HIST_STRIDE = smem_size + 1;
+  __shared__ int32_t shared_hist[HIST_COPIES * HIST_STRIDE];
+  __shared__ int32_t shared_offsets[smem_size + 1];
+  __shared__ int32_t local_expert_map[smem_size];
+  typedef cub::BlockScan<int32_t, CUB_BLOCK_THREADS> BlockScan;
+  __shared__ typename BlockScan::TempStorage temp_storage;
 
-    for (int i = tid; i <= num_experts; i += blockDim.x) {
-        shared_counts[i] = 0;
+  for (int i = static_cast<int>(tid); i < HIST_COPIES * HIST_STRIDE;
+       i += static_cast<int>(stride)) {
+    shared_hist[i] = 0;
+  }
+  if (expert_map != nullptr && tid < static_cast<size_t>(num_experts)) {
+    local_expert_map[tid] = expert_map[tid];
+  }
+  __syncthreads();
+
+  const int copy_id =
+      (HIST_COPIES > 1) ? (static_cast<int>(tid) & (HIST_COPIES - 1)) : 0;
+  int32_t* my_hist = shared_hist + copy_id * HIST_STRIDE;
+
+  for (size_t i = tid; i < numel; i += stride) {
+    const int expert_id = static_cast<int>(topk_ids[i]);
+    const bool is_valid =
+        (expert_map == nullptr) || (local_expert_map[expert_id] != -1);
+    if (expert_mask != nullptr) {
+      expert_mask[i] = is_valid;
     }
-
-    if (Is_fuse_fill) {
-        for (size_t i = global_tid; i < sorted_token_ids_len; i += global_stride) {
-            sorted_token_ids[i] = topk_numel;
-        }
+    if (!Is_EP || is_valid) {
+      atomicAdd(&my_hist[expert_id], 1);
     }
+  }
 
-    typedef cub::BlockScan<int32_t, CUB_BLOCK_THREADS> BlockScan;
-    __shared__ typename BlockScan::TempStorage temp_storage;
+  __syncthreads();
 
-    __syncthreads();
-
-    for (size_t i = global_tid; i < effective_numel; i += global_stride) {
-        int expert_id = topk_ids[i];
-        
-        // EP 处理
-        if (Is_EP) {
-            if (expert_map[expert_id] != -1) {
-                atomicAdd(&shared_counts[expert_id], 1);
-                if (expert_mask) expert_mask[i] = true;
-            } else {
-                if (expert_mask) expert_mask[i] = false;
-            }
-        } else {
-            atomicAdd(&shared_counts[expert_id], 1);
-            if (expert_mask) {
-                if (expert_map && expert_map[expert_id] == -1) {
-                    expert_mask[i] = false;
-                } else {
-                    expert_mask[i] = true;
-                }
-            }
-        }
+  int32_t local_prefix[HIST_COPIES];
+  int32_t expert_count = 0;
+  if (tid < static_cast<size_t>(num_experts)) {
+#pragma unroll
+    for (int c = 0; c < HIST_COPIES; ++c) {
+      local_prefix[c] = expert_count;
+      expert_count += shared_hist[c * HIST_STRIDE + tid];
     }
+  }
 
-    __syncthreads();
-    if (tid < num_experts) {
-        int count = shared_counts[tid];
-        if (count > 0) {
-            atomicAdd(&cumsum[tid], count);
-        }
+  const int32_t my_padded_count =
+      (tid < static_cast<size_t>(num_experts))
+          ? align_up_block(expert_count, block_size)
+          : 0;
+  int32_t exclusive_prefix_sum = 0;
+  cub::Sum scan_op;
+
+  BlockScan(temp_storage).ExclusiveScan(
+      my_padded_count,
+      exclusive_prefix_sum,
+      0,
+      scan_op);
+
+  if (tid == CUB_BLOCK_THREADS - 1) {
+    const int32_t total = exclusive_prefix_sum + my_padded_count;
+    *total_tokens_post_pad = total;
+    shared_offsets[num_experts] = total;
+  }
+
+  if (tid < static_cast<size_t>(num_experts)) {
+    shared_offsets[tid] = exclusive_prefix_sum;
+#pragma unroll
+    for (int c = 0; c < HIST_COPIES; ++c) {
+      shared_hist[c * HIST_STRIDE + tid] = exclusive_prefix_sum + local_prefix[c];
     }
+  }
 
-    // // 全局同步
-    // __threadfence();
+  __syncthreads();
 
-    __shared__ bool is_last_block;
-    if (tid == 0) {
-        int ticket = atomicAdd(global_count, 1);
-        is_last_block = (ticket == (gridDim.x - 1));
+  if (tid < static_cast<size_t>(num_experts)) {
+    const int32_t mapped =
+        (expert_map != nullptr) ? local_expert_map[tid] : static_cast<int32_t>(tid);
+    write_expert_block_ids(
+        expert_ids, shared_offsets[tid], shared_offsets[tid + 1], block_size, mapped);
+  }
+
+  // Pass 2 scatter only accesses shared_hist and sorted_token_ids (disjoint from
+  // shared_offsets and expert_ids above).
+  for (size_t i = tid; i < numel; i += stride) {
+    const int expert_id = static_cast<int>(topk_ids[i]);
+    if (!Is_EP || expert_map == nullptr || local_expert_map[expert_id] != -1) {
+      const int32_t rank_post_pad = atomicAdd(&my_hist[expert_id], 1);
+      sorted_token_ids[rank_post_pad] = static_cast<int32_t>(i);
     }
-    __syncthreads();
+  }
+}
 
-    if (!is_last_block) {
-        return;
+template <typename scalar_t, int smem_size, int CUB_BLOCK_THREADS>
+__global__ void moe_align_block_size_kernel_opt_cub(
+    const scalar_t* __restrict__ topk_ids,
+    int32_t* __restrict__ sorted_token_ids, int32_t* __restrict__ expert_ids,
+    int32_t* __restrict__ total_tokens_post_pad, int32_t num_experts,
+    int32_t padded_num_experts, int32_t experts_per_warp, int32_t block_size,
+    size_t numel, int32_t* __restrict__ cumsum,
+    int32_t* __restrict__ expert_map, bool* __restrict__ expert_mask,
+    int32_t* __restrict__ num_local_tokens, bool Is_EP,
+    int64_t sorted_token_ids_len, bool Is_fuse_fill,
+    int32_t* __restrict__ global_count, int32_t topk) {
+  static_assert(CUB_BLOCK_THREADS >= smem_size,
+                "CUB_BLOCK_THREADS must be >= smem_size");
+  const int32_t topk_numel = static_cast<int32_t>(numel);
+  const int tid = threadIdx.x;
+
+  size_t effective_numel = numel;
+  if (num_local_tokens != nullptr) {
+    const int32_t local_tok = num_local_tokens[0];
+    if (local_tok == 0) {
+      if (blockIdx.x == 0 && tid == 0) {
+        *total_tokens_post_pad = 0;
+      }
+      return;
     }
+    effective_numel = static_cast<size_t>(local_tok) * static_cast<size_t>(topk);
+  }
 
-    int32_t my_padded_count = (tid < num_experts) ? CEILDIV(cumsum[tid] , block_size) * block_size : 0;
-    int32_t exclusive_prefix_sum = 0;
-    cub::Sum scan_op;
+  const size_t global_tid = static_cast<size_t>(blockIdx.x) * blockDim.x + tid;
+  const size_t global_stride = static_cast<size_t>(blockDim.x) * gridDim.x;
 
-    BlockScan(temp_storage).ExclusiveScan(
-        my_padded_count,
-        exclusive_prefix_sum,
-        0, 
-        scan_op
-    );
+  constexpr int HIST_COPIES = hcu_align_hist_copies<smem_size>();
+  constexpr int HIST_STRIDE = smem_size + 1;
+  __shared__ int32_t shared_hist[HIST_COPIES * HIST_STRIDE];
+  __shared__ int32_t shared_offsets[smem_size + 1];
+  __shared__ int32_t local_expert_map[smem_size];
 
+  for (int i = tid; i < HIST_COPIES * HIST_STRIDE; i += blockDim.x) {
+    shared_hist[i] = 0;
+  }
+  if (expert_map != nullptr && tid < num_experts) {
+    local_expert_map[tid] = expert_map[tid];
+  }
 
-    if (tid == CUB_BLOCK_THREADS - 1) {
-        int32_t total = exclusive_prefix_sum + my_padded_count;
-        *total_tokens_post_pad = total;
-        shared_counts[num_experts] = total;
+  if (Is_fuse_fill) {
+    fill_sorted_token_ids_vec(
+        sorted_token_ids, sorted_token_ids_len, topk_numel, global_tid, global_stride);
+  }
+
+  typedef cub::BlockScan<int32_t, CUB_BLOCK_THREADS> BlockScan;
+  __shared__ typename BlockScan::TempStorage temp_storage;
+
+  __syncthreads();
+
+  const int copy_id = (HIST_COPIES > 1) ? (tid & (HIST_COPIES - 1)) : 0;
+  int32_t* my_hist = shared_hist + copy_id * HIST_STRIDE;
+
+  for (size_t i = global_tid; i < effective_numel; i += global_stride) {
+    const int expert_id = static_cast<int>(topk_ids[i]);
+    const bool is_valid =
+        (expert_map == nullptr) || (local_expert_map[expert_id] != -1);
+    if (expert_mask != nullptr) {
+      expert_mask[i] = is_valid;
     }
-
-    if (tid < num_experts) {
-        shared_counts[tid] = exclusive_prefix_sum;
+    if (!Is_EP || is_valid) {
+      atomicAdd(&my_hist[expert_id], 1);
     }
-    __syncthreads();
+  }
 
-    
-    if (tid < num_experts) {
-        for (int i = shared_counts[tid]; i < shared_counts[tid + 1]; i += block_size) {
-            if (expert_map != nullptr) {
-                expert_ids[i / block_size] = expert_map[tid];
-            } else {
-                expert_ids[i / block_size] = tid;
-            }
-        }
+  __syncthreads();
+  if (tid < num_experts) {
+    int32_t count = 0;
+#pragma unroll
+    for (int c = 0; c < HIST_COPIES; ++c) {
+      count += shared_hist[c * HIST_STRIDE + tid];
     }
+    if (count > 0) {
+      atomicAdd(&cumsum[tid], count);
+    }
+  }
 
-    if (tid < num_experts) {
-        cumsum[tid] = shared_counts[tid];
-    }
+  // Device-wide fence + block barrier BEFORE signaling global_count so all waves
+  // across all CUs / XCDs (e.g. 4-XCD gfx946) publish cumsum updates first.
+  __threadfence();
+  __syncthreads();
+
+  __shared__ bool is_last_block;
+  if (tid == 0) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(USE_ROCM)
+    const int ticket = __hip_atomic_fetch_add(
+        global_count, 1, __ATOMIC_ACQ_REL, __HIP_MEMORY_SCOPE_AGENT);
+#else
+    const int ticket = atomicAdd(global_count, 1);
+#endif
+    is_last_block = (ticket == (static_cast<int>(gridDim.x) - 1));
+  }
+  __syncthreads();
+
+  if (!is_last_block) {
+    return;
+  }
+
+  // Acquire device-coherent view across all consumer waves & XCDs.
+#if defined(__HIP_PLATFORM_AMD__) || defined(USE_ROCM)
+  (void)__hip_atomic_load(
+      global_count, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_AGENT);
+#else
+  __threadfence();
+#endif
+  int32_t my_padded_count = 0;
+  if (tid < num_experts) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(USE_ROCM)
+    const int32_t expert_count = __hip_atomic_load(
+        &cumsum[tid], __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
+#else
+    const int32_t expert_count = atomicAdd(&cumsum[tid], 0);
+#endif
+    my_padded_count = align_up_block(expert_count, block_size);
+  }
+  int32_t exclusive_prefix_sum = 0;
+  cub::Sum scan_op;
+
+  BlockScan(temp_storage).ExclusiveScan(
+      my_padded_count,
+      exclusive_prefix_sum,
+      0,
+      scan_op);
+
+  if (tid == CUB_BLOCK_THREADS - 1) {
+    const int32_t total = exclusive_prefix_sum + my_padded_count;
+    *total_tokens_post_pad = total;
+    shared_offsets[num_experts] = total;
+  }
+
+  if (tid < num_experts) {
+    shared_offsets[tid] = exclusive_prefix_sum;
+  }
+  __syncthreads();
+
+  if (tid < num_experts) {
+    const int32_t mapped =
+        (expert_map != nullptr) ? local_expert_map[tid] : tid;
+    write_expert_block_ids(
+        expert_ids, shared_offsets[tid], shared_offsets[tid + 1], block_size, mapped);
+    cumsum[tid] = shared_offsets[tid];
+  }
 }
 
 
@@ -491,60 +580,72 @@ __global__ void count_and_sort_expert_tokens_kernel(
   }
 }
 
-template <typename scalar_t, int TOPK,int seme_size,int num_experts>
+template <typename scalar_t, int smem_size>
 __global__ void count_and_sort_expert_tokens_kernel_EP(
-    const scalar_t *__restrict__ topk_ids,
-    int32_t *__restrict__ sorted_token_ids, int32_t *__restrict__ cumsum_buffer,
-    size_t numel, int32_t *__restrict__ num_local_tokens,int32_t* expert_map,bool Is_EP) {
+    const scalar_t* __restrict__ topk_ids,
+    int32_t* __restrict__ sorted_token_ids, int32_t* __restrict__ cumsum_buffer,
+    size_t numel, int32_t num_experts,
+    int32_t* __restrict__ num_local_tokens, int32_t* __restrict__ expert_map,
+    bool Is_EP, int32_t topk) {
   if (num_local_tokens != nullptr) {
-    if (num_local_tokens[0] == 0) {
+    const int32_t local_tok = num_local_tokens[0];
+    if (local_tok == 0) {
       return;
-    } else {
-      numel = num_local_tokens[0] * TOPK;
     }
+    numel = static_cast<size_t>(local_tok) * static_cast<size_t>(topk);
   }
-  int expert_id;
-  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-   const int stride = blockDim.x * gridDim.x;
-  //const size_t stride = blockDim.x * gridDim.x;
-  __shared__ int32_t lds_count[seme_size];
-   if(threadIdx.x < num_experts){
-     lds_count[threadIdx.x ] = 0;
+  const size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
+  const int ltid = threadIdx.x;
+
+  constexpr int HIST_COPIES = hcu_align_hist_copies<smem_size>();
+  constexpr int HIST_STRIDE = smem_size + 1;
+  __shared__ int32_t shared_hist[HIST_COPIES * HIST_STRIDE];
+  __shared__ int32_t local_expert_map[smem_size];
+
+  for (int i = ltid; i < HIST_COPIES * HIST_STRIDE; i += blockDim.x) {
+    shared_hist[i] = 0;
+  }
+  if (expert_map != nullptr && ltid < num_experts) {
+    local_expert_map[ltid] = expert_map[ltid];
   }
   __syncthreads();
-   for (size_t i = tid; i < numel; i += stride) {
-    int expert_id = topk_ids[i];
-    if (Is_EP) {
-      if (expert_map != nullptr) {
-          int32_t local_idx = expert_map[expert_id];
-          if (local_idx != -1) {
-              atomicAdd(&lds_count[local_idx], 1);
-          }
-      }
-    } else {
-        atomicAdd(&lds_count[expert_id], 1);
+
+  const int copy_id = (HIST_COPIES > 1) ? (ltid & (HIST_COPIES - 1)) : 0;
+  int32_t* my_hist = shared_hist + copy_id * HIST_STRIDE;
+
+  for (size_t i = tid; i < numel; i += stride) {
+    const int expert_id = static_cast<int>(topk_ids[i]);
+    if (!Is_EP || expert_map == nullptr || local_expert_map[expert_id] != -1) {
+      atomicAdd(&my_hist[expert_id], 1);
     }
   }
   __syncthreads();
 
-  if(threadIdx.x < num_experts){
-     lds_count[threadIdx.x ] = atomicAdd(&cumsum_buffer[threadIdx.x ], lds_count[threadIdx.x ]);
+  // cumsum_buffer is indexed by logical expert_id (matching Kernel 1).
+  if (ltid < num_experts) {
+    int32_t local_prefix[HIST_COPIES];
+    int32_t block_total = 0;
+#pragma unroll
+    for (int c = 0; c < HIST_COPIES; ++c) {
+      local_prefix[c] = block_total;
+      block_total += shared_hist[c * HIST_STRIDE + ltid];
+    }
+    if (block_total > 0) {
+      const int32_t global_base = atomicAdd(&cumsum_buffer[ltid], block_total);
+#pragma unroll
+      for (int c = 0; c < HIST_COPIES; ++c) {
+        shared_hist[c * HIST_STRIDE + ltid] = global_base + local_prefix[c];
+      }
+    }
   }
 
   __syncthreads();
   for (size_t i = tid; i < numel; i += stride) {
-    int expert_id = topk_ids[i];
-    if (Is_EP) {
-      if (expert_map != nullptr) {
-           int32_t local_idx = expert_map[expert_id];
-           if (local_idx != -1) {
-               int32_t rank_post_pad = atomicAdd(&lds_count[local_idx], 1);
-               sorted_token_ids[rank_post_pad] = i; 
-           }
-      }
-    } else {
-          int32_t rank_post_pad = atomicAdd(&lds_count[expert_id], 1);
-          sorted_token_ids[rank_post_pad] = i; 
+    const int expert_id = static_cast<int>(topk_ids[i]);
+    if (!Is_EP || expert_map == nullptr || local_expert_map[expert_id] != -1) {
+      const int32_t rank_post_pad = atomicAdd(&my_hist[expert_id], 1);
+      sorted_token_ids[rank_post_pad] = static_cast<int32_t>(i);
     }
   }
 }
@@ -1113,99 +1214,185 @@ __global__ void moe_align_block_size_small_batch_expert_kernel(
     }
   }
 }
-#define DISPATCH_MOE_ALIGN_KERNEL(TEMPLATE_CAPACITY) \
-    if (topk_ids.numel() <= TEMPLATE_CAPACITY) { \
-         /* 小size*/ \
-        threads = TEMPLATE_CAPACITY; \
-        if (Is_EP) { \
-            moe_align_block_size_kernel_opt_fused_small_size<scalar_t, TEMPLATE_CAPACITY, 8, true, TEMPLATE_CAPACITY><<< \
-                1, threads, 0, stream>>>( \
-                topk_ids.data_ptr<scalar_t>(), \
-                sorted_token_ids.data_ptr<int32_t>(), \
-                experts_ids.data_ptr<int32_t>(), \
-                num_tokens_post_pad.data_ptr<int32_t>(), num_experts, \
-                padded_num_experts, experts_per_warp, block_size, topk_ids.numel(), \
-                expert_map.has_value() ? expert_map->data_ptr<int32_t>() : nullptr, \
-                expert_mask.has_value() ? expert_mask->data_ptr<bool>() : nullptr, \
-                num_local_tokens.has_value() ? num_local_tokens->data_ptr<int32_t>() : nullptr, \
-                sorted_token_ids.numel(), Is_fuse_fill); \
-        } else { \
-            moe_align_block_size_kernel_opt_fused_small_size<scalar_t, TEMPLATE_CAPACITY, 8, false, TEMPLATE_CAPACITY><<< \
-                1, threads, 0, stream>>>( \
-                topk_ids.data_ptr<scalar_t>(), \
-                sorted_token_ids.data_ptr<int32_t>(), \
-                experts_ids.data_ptr<int32_t>(), \
-                num_tokens_post_pad.data_ptr<int32_t>(), num_experts, \
-                padded_num_experts, experts_per_warp, block_size, topk_ids.numel(), \
-                expert_map.has_value() ? expert_map->data_ptr<int32_t>() : nullptr, \
-                expert_mask.has_value() ? expert_mask->data_ptr<bool>() : nullptr, \
-                num_local_tokens.has_value() ? num_local_tokens->data_ptr<int32_t>() : nullptr, \
-                sorted_token_ids.numel(), Is_fuse_fill); \
-        } \
-    } else if (topk_ids.numel() < 16384) { \
-        /* 中等size*/ \
-        auto align_kernel = moe_align_block_size_kernel_opt_fused_cub<scalar_t, TEMPLATE_CAPACITY, 8, TEMPLATE_CAPACITY>; \
-        size_t shared_mem_size = (num_experts + 1) * sizeof(int32_t); \
-            if (topk_ids.numel() <= 256) {   \
-                 threads = 128;                                       \
-              } else if (topk_ids.numel() <= 512) {                   \
-                 threads = 256;                                       \
-              } else if (topk_ids.numel() <= 1024){                   \
-                 threads = 512;                                        \
-              }else{                                                   \
-                 threads = 1024;                                        \
-              }                                                         \
-        if(threads <  TEMPLATE_CAPACITY) threads = TEMPLATE_CAPACITY; \
-        \
-        align_kernel<<<1, threads, shared_mem_size, stream>>>( \
-            topk_ids.data_ptr<scalar_t>(), \
-            sorted_token_ids.data_ptr<int32_t>(), \
-            experts_ids.data_ptr<int32_t>(), \
-            num_tokens_post_pad.data_ptr<int32_t>(), num_experts, \
-            padded_num_experts, experts_per_warp, block_size, \
-            topk_ids.numel(), \
-            expert_map.has_value() ? expert_map->data_ptr<int32_t>() : nullptr, \
-            expert_mask.has_value() ? expert_mask->data_ptr<bool>() : nullptr, \
-            num_local_tokens.has_value() ? num_local_tokens->data_ptr<int32_t>() : nullptr, \
-            Is_EP, sorted_token_ids.numel(), Is_fuse_fill); \
-    } else { \
-        /* 大size */ \
-        auto align_kernel = moe_align_block_size_kernel_opt_cub<scalar_t, TEMPLATE_CAPACITY, 8, 512>; \
-        auto options_int = torch::TensorOptions().dtype(torch::kInt).device(topk_ids.device()); \
-        torch::Tensor cumsum_buffer = torch::zeros({TEMPLATE_CAPACITY + 2}, options_int); \
-        size_t num_warps = CEILDIV(padded_num_experts, experts_per_warp); \
-        size_t shared_mem_size = num_experts * sizeof(int32_t); \
-        /* num_expert > 512 ?*/                                          \
-        threads = 512; \
-        int num_blocks = std::min(80*2,(topk_ids.numel() + threads - 1) / threads); \
-        /*torch::Tensor global_count = torch::zeros({1}, options_int); */ \
-        \
-        align_kernel<<<num_blocks, threads, shared_mem_size, stream>>>( \
-            topk_ids.data_ptr<scalar_t>(), \
-            sorted_token_ids.data_ptr<int32_t>(), \
-            experts_ids.data_ptr<int32_t>(), \
-            num_tokens_post_pad.data_ptr<int32_t>(), num_experts, \
-            padded_num_experts, experts_per_warp, block_size, \
-            topk_ids.numel(), cumsum_buffer.data_ptr<int32_t>(), \
-            expert_map.has_value() ? expert_map->data_ptr<int32_t>() : nullptr, \
-            expert_mask.has_value() ? expert_mask->data_ptr<bool>() : nullptr, \
-            num_local_tokens.has_value() ? num_local_tokens->data_ptr<int32_t>() : nullptr, \
-            Is_EP, sorted_token_ids.numel(), Is_fuse_fill,(cumsum_buffer.data_ptr<int32_t>() + TEMPLATE_CAPACITY + 1)); \
-        \
-        const int block_threads = 1024; \
-        num_blocks = (topk_ids.numel() + block_threads - 1) / block_threads; \
-        const int max_blocks = 65535; \
-        const int actual_blocks = std::min(num_blocks, max_blocks); \
-        \
-        auto sort_kernel = count_and_sort_expert_tokens_kernel_EP<scalar_t, 8, TEMPLATE_CAPACITY, TEMPLATE_CAPACITY>; \
-        sort_kernel<<<std::max(actual_blocks/2,1), block_threads, 0, stream>>>( \
-            topk_ids.data_ptr<scalar_t>(), \
-            sorted_token_ids.data_ptr<int32_t>(), \
-            cumsum_buffer.data_ptr<int32_t>(), topk_ids.numel(), \
-            num_local_tokens.has_value() ? num_local_tokens->data_ptr<int32_t>() : nullptr, \
-            expert_map.has_value() ? expert_map->data_ptr<int32_t>() : nullptr, \
-            Is_EP); \
+template <typename scalar_t, int TEMPLATE_CAPACITY>
+void launch_moe_align_opt(
+    const torch::Tensor& topk_ids,
+    int64_t num_experts,
+    int64_t padded_num_experts,
+    int experts_per_warp,
+    int64_t block_size,
+    torch::Tensor& sorted_token_ids,
+    torch::Tensor& experts_ids,
+    torch::Tensor& num_tokens_post_pad,
+    int32_t* expert_map_ptr,
+    bool* expert_mask_ptr,
+    int32_t* num_local_tokens_ptr,
+    bool Is_EP,
+    bool Is_fuse_fill,
+    int32_t topk,
+    int cu_count,
+    bool is_gfx946,
+    cudaStream_t stream) {
+  const int64_t numel = topk_ids.numel();
+  const int64_t sorted_len = sorted_token_ids.numel();
+  // On gfx946 (192 CUs / 4 XCDs), enter the multi-block path earlier to avoid
+  // idling 191 CUs on medium batches while preserving gfx936/938 thresholds.
+  const int64_t multi_block_threshold = is_gfx946 ? 4096 : 16384;
+
+  if (numel <= TEMPLATE_CAPACITY) {
+    constexpr int threads = TEMPLATE_CAPACITY;
+    if (Is_EP) {
+      moe_align_block_size_kernel_opt_fused_small_size<
+          scalar_t, TEMPLATE_CAPACITY, true, TEMPLATE_CAPACITY>
+          <<<1, threads, 0, stream>>>(
+              topk_ids.data_ptr<scalar_t>(),
+              sorted_token_ids.data_ptr<int32_t>(),
+              experts_ids.data_ptr<int32_t>(),
+              num_tokens_post_pad.data_ptr<int32_t>(),
+              static_cast<int32_t>(num_experts),
+              static_cast<int32_t>(padded_num_experts),
+              experts_per_warp,
+              static_cast<int32_t>(block_size),
+              static_cast<size_t>(numel),
+              expert_map_ptr,
+              expert_mask_ptr,
+              num_local_tokens_ptr,
+              sorted_len,
+              Is_fuse_fill,
+              topk);
+    } else {
+      moe_align_block_size_kernel_opt_fused_small_size<
+          scalar_t, TEMPLATE_CAPACITY, false, TEMPLATE_CAPACITY>
+          <<<1, threads, 0, stream>>>(
+              topk_ids.data_ptr<scalar_t>(),
+              sorted_token_ids.data_ptr<int32_t>(),
+              experts_ids.data_ptr<int32_t>(),
+              num_tokens_post_pad.data_ptr<int32_t>(),
+              static_cast<int32_t>(num_experts),
+              static_cast<int32_t>(padded_num_experts),
+              experts_per_warp,
+              static_cast<int32_t>(block_size),
+              static_cast<size_t>(numel),
+              expert_map_ptr,
+              expert_mask_ptr,
+              num_local_tokens_ptr,
+              sorted_len,
+              Is_fuse_fill,
+              topk);
     }
+  } else if (numel < multi_block_threshold) {
+    int threads = 1024;
+    if (numel <= 256) {
+      threads = 128;
+    } else if (numel <= 512) {
+      threads = 256;
+    } else if (numel <= 1024) {
+      threads = 512;
+    }
+    if (threads < TEMPLATE_CAPACITY) {
+      threads = TEMPLATE_CAPACITY;
+    }
+
+    auto launch_fused = [&](auto block_threads_tag) {
+      constexpr int kBlockThreads = decltype(block_threads_tag)::value;
+      moe_align_block_size_kernel_opt_fused_cub<
+          scalar_t, TEMPLATE_CAPACITY, kBlockThreads>
+          <<<1, kBlockThreads, 0, stream>>>(
+              topk_ids.data_ptr<scalar_t>(),
+              sorted_token_ids.data_ptr<int32_t>(),
+              experts_ids.data_ptr<int32_t>(),
+              num_tokens_post_pad.data_ptr<int32_t>(),
+              static_cast<int32_t>(num_experts),
+              static_cast<int32_t>(padded_num_experts),
+              experts_per_warp,
+              static_cast<int32_t>(block_size),
+              static_cast<size_t>(numel),
+              expert_map_ptr,
+              expert_mask_ptr,
+              num_local_tokens_ptr,
+              Is_EP,
+              sorted_len,
+              Is_fuse_fill,
+              topk);
+    };
+
+    if constexpr (TEMPLATE_CAPACITY <= 128) {
+      if (threads == 128) {
+        launch_fused(std::integral_constant<int, 128>{});
+        return;
+      }
+    }
+    if constexpr (TEMPLATE_CAPACITY <= 256) {
+      if (threads == 256) {
+        launch_fused(std::integral_constant<int, 256>{});
+        return;
+      }
+    }
+    if constexpr (TEMPLATE_CAPACITY <= 512) {
+      if (threads == 512) {
+        launch_fused(std::integral_constant<int, 512>{});
+        return;
+      }
+    }
+    launch_fused(std::integral_constant<int, 1024>{});
+  } else {
+    constexpr int kK1Threads = (TEMPLATE_CAPACITY > 512) ? 1024 : 512;
+    auto options_int =
+        torch::TensorOptions().dtype(torch::kInt).device(topk_ids.device());
+    torch::Tensor cumsum_buffer =
+        torch::empty({TEMPLATE_CAPACITY + 2}, options_int);
+    C10_CUDA_CHECK(cudaMemsetAsync(
+        cumsum_buffer.data_ptr<int32_t>(),
+        0,
+        static_cast<size_t>(TEMPLATE_CAPACITY + 2) * sizeof(int32_t),
+        stream));
+
+    const int64_t max_k1_blocks = static_cast<int64_t>(cu_count) * 2;
+    const int64_t k1_blocks_64 =
+        std::min<int64_t>(max_k1_blocks, (numel + kK1Threads - 1) / kK1Threads);
+    const int k1_blocks = static_cast<int>(std::max<int64_t>(k1_blocks_64, 1));
+
+    moe_align_block_size_kernel_opt_cub<scalar_t, TEMPLATE_CAPACITY, kK1Threads>
+        <<<k1_blocks, kK1Threads, 0, stream>>>(
+            topk_ids.data_ptr<scalar_t>(),
+            sorted_token_ids.data_ptr<int32_t>(),
+            experts_ids.data_ptr<int32_t>(),
+            num_tokens_post_pad.data_ptr<int32_t>(),
+            static_cast<int32_t>(num_experts),
+            static_cast<int32_t>(padded_num_experts),
+            experts_per_warp,
+            static_cast<int32_t>(block_size),
+            static_cast<size_t>(numel),
+            cumsum_buffer.data_ptr<int32_t>(),
+            expert_map_ptr,
+            expert_mask_ptr,
+            num_local_tokens_ptr,
+            Is_EP,
+            sorted_len,
+            Is_fuse_fill,
+            cumsum_buffer.data_ptr<int32_t>() + TEMPLATE_CAPACITY + 1,
+            topk);
+
+    constexpr int kK2Threads = 1024;
+    const int64_t raw_k2_blocks = (numel + kK2Threads - 1) / kK2Threads;
+    const int64_t max_k2_blocks =
+        std::min<int64_t>(65535, static_cast<int64_t>(cu_count) * 4);
+    const int k2_blocks = static_cast<int>(
+        std::max<int64_t>(std::min<int64_t>(raw_k2_blocks / 2, max_k2_blocks), 1));
+
+    count_and_sort_expert_tokens_kernel_EP<scalar_t, TEMPLATE_CAPACITY>
+        <<<k2_blocks, kK2Threads, 0, stream>>>(
+            topk_ids.data_ptr<scalar_t>(),
+            sorted_token_ids.data_ptr<int32_t>(),
+            cumsum_buffer.data_ptr<int32_t>(),
+            static_cast<size_t>(numel),
+            static_cast<int32_t>(num_experts),
+            num_local_tokens_ptr,
+            expert_map_ptr,
+            Is_EP,
+            topk);
+  }
+}
 
 void moe_align_block_size(
     torch::Tensor topk_ids, int64_t num_experts, int64_t block_size,
@@ -1214,7 +1401,31 @@ void moe_align_block_size(
     const torch::optional<torch::Tensor> &expert_map =  torch::nullopt,
     const torch::optional<torch::Tensor> &expert_mask =  torch::nullopt, // bool
     const torch::optional<torch::Tensor> &num_local_tokens =  torch::nullopt,bool Is_EP = false,bool Is_fuse_fill = true) {
+  const at::cuda::OptionalCUDAGuard device_guard(device_of(topk_ids));
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+  const auto* dev_props = at::cuda::getCurrentDeviceProperties();
+  const int cu_count =
+      (dev_props != nullptr && dev_props->multiProcessorCount > 0)
+          ? dev_props->multiProcessorCount
+          : 80;
+  const bool is_gfx946 =
+      dev_props != nullptr && std::strncmp(dev_props->gcnArchName, "gfx946", 6) == 0;
+  const int32_t topk =
+      (topk_ids.dim() >= 2) ? static_cast<int32_t>(topk_ids.size(-1)) : 8;
+
+  int32_t* expert_map_ptr =
+      (expert_map.has_value() && expert_map->defined())
+          ? expert_map->data_ptr<int32_t>()
+          : nullptr;
+  bool* expert_mask_ptr =
+      (expert_mask.has_value() && expert_mask->defined())
+          ? expert_mask->data_ptr<bool>()
+          : nullptr;
+  int32_t* num_local_tokens_ptr =
+      (num_local_tokens.has_value() && num_local_tokens->defined())
+          ? num_local_tokens->data_ptr<int32_t>()
+          : nullptr;
 
   int64_t padded_num_experts =
       ((num_experts + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
@@ -1223,92 +1434,83 @@ void moe_align_block_size(
   threads = ((threads + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
   AT_DISPATCH_INTEGRAL_TYPES(
       topk_ids.scalar_type(), "moe_align_block_size_kernel", [&] {
-        bool small_batch_expert_mode =
-            (topk_ids.numel() < 1024) && (num_experts <= 64);
+        int template_capacity = 0;
+        if (num_experts > 0 && num_experts <= 64) {
+          template_capacity = 64;
+        } else if (num_experts > 64 && num_experts <= 128) {
+          template_capacity = 128;
+        } else if (num_experts > 128 && num_experts <= 256) {
+          template_capacity = 256;
+        } else if (num_experts > 256 && num_experts <= 512) {
+          template_capacity = 512;
+        } else if (num_experts > 512 && num_experts <= 1024) {
+          template_capacity = 1024;
+        }
 
-        if (small_batch_expert_mode) {
-          const int32_t threads = std::max((int32_t)num_experts, WARP_SIZE);
-          const int32_t shared_mem_size =
-              ((threads + 1) * num_experts + (num_experts + 1)) *
-              sizeof(int32_t);
+        if (template_capacity == 64) {
+          launch_moe_align_opt<scalar_t, 64>(
+              topk_ids, num_experts, padded_num_experts, experts_per_warp,
+              block_size, sorted_token_ids, experts_ids, num_tokens_post_pad,
+              expert_map_ptr, expert_mask_ptr, num_local_tokens_ptr, Is_EP,
+              Is_fuse_fill, topk, cu_count, is_gfx946, stream);
+        } else if (template_capacity == 128) {
+          launch_moe_align_opt<scalar_t, 128>(
+              topk_ids, num_experts, padded_num_experts, experts_per_warp,
+              block_size, sorted_token_ids, experts_ids, num_tokens_post_pad,
+              expert_map_ptr, expert_mask_ptr, num_local_tokens_ptr, Is_EP,
+              Is_fuse_fill, topk, cu_count, is_gfx946, stream);
+        } else if (template_capacity == 256) {
+          launch_moe_align_opt<scalar_t, 256>(
+              topk_ids, num_experts, padded_num_experts, experts_per_warp,
+              block_size, sorted_token_ids, experts_ids, num_tokens_post_pad,
+              expert_map_ptr, expert_mask_ptr, num_local_tokens_ptr, Is_EP,
+              Is_fuse_fill, topk, cu_count, is_gfx946, stream);
+        } else if (template_capacity == 512) {
+          launch_moe_align_opt<scalar_t, 512>(
+              topk_ids, num_experts, padded_num_experts, experts_per_warp,
+              block_size, sorted_token_ids, experts_ids, num_tokens_post_pad,
+              expert_map_ptr, expert_mask_ptr, num_local_tokens_ptr, Is_EP,
+              Is_fuse_fill, topk, cu_count, is_gfx946, stream);
+        } else if (template_capacity == 1024) {
+          launch_moe_align_opt<scalar_t, 1024>(
+              topk_ids, num_experts, padded_num_experts, experts_per_warp,
+              block_size, sorted_token_ids, experts_ids, num_tokens_post_pad,
+              expert_map_ptr, expert_mask_ptr, num_local_tokens_ptr, Is_EP,
+              Is_fuse_fill, topk, cu_count, is_gfx946, stream);
+        } else {
+          // baseline fallback for num_experts > 1024
+          auto align_kernel = moe_align_block_size_kernel<scalar_t>;
+          auto options_int = torch::TensorOptions()
+                                 .dtype(torch::kInt)
+                                 .device(topk_ids.device());
+          torch::Tensor cumsum_buffer =
+              torch::zeros({num_experts + 1}, options_int);
+          size_t num_warps = CEILDIV(padded_num_experts, experts_per_warp);
+          size_t shared_mem_size =
+              num_warps * experts_per_warp * sizeof(int32_t);
 
-          auto small_batch_expert_kernel =
-              moe_align_block_size_small_batch_expert_kernel<scalar_t>;
-          small_batch_expert_kernel<<<1, threads, shared_mem_size, stream>>>(
+          align_kernel<<<1, threads, shared_mem_size, stream>>>(
               topk_ids.data_ptr<scalar_t>(),
               sorted_token_ids.data_ptr<int32_t>(),
               experts_ids.data_ptr<int32_t>(),
-              num_tokens_post_pad.data_ptr<int32_t>(), num_experts, block_size,
-              topk_ids.numel(),
-              expert_map.has_value() ? expert_map->data_ptr<int32_t>()
-                                     : nullptr);
-        } else {
-            int template_capacity = 0;
-            if (num_experts > 64 && num_experts <= 128) {
-                template_capacity = 128;
-            } else if (num_experts > 128 && num_experts <= 256) {
-                template_capacity = 256;
-            } else if (num_experts > 256 && num_experts <= 512) {
-                template_capacity = 512;
-            } else if (num_experts > 512 && num_experts <= 1024) {
-                template_capacity = 1024;
-            }
+              num_tokens_post_pad.data_ptr<int32_t>(), num_experts,
+              padded_num_experts, experts_per_warp, block_size,
+              topk_ids.numel(), cumsum_buffer.data_ptr<int32_t>(),
+              expert_map_ptr);
 
-            bool dispatched = false;
+          const int block_threads = std::min(256, (int)threads);
+          const int num_blocks =
+              (topk_ids.numel() + block_threads - 1) / block_threads;
+          const int max_blocks = 65535;
+          const int actual_blocks = std::min(num_blocks, max_blocks);
 
-            if (template_capacity > 0) {
-                if (template_capacity == 128) {
-                    DISPATCH_MOE_ALIGN_KERNEL(128);
-                    dispatched = true;
-                } else if (template_capacity == 256) {
-                    DISPATCH_MOE_ALIGN_KERNEL(256);
-                    dispatched = true;
-                } else if (template_capacity == 512) {
-                    DISPATCH_MOE_ALIGN_KERNEL(512);
-                    dispatched = true;
-                } else if (template_capacity == 1024) {
-                    DISPATCH_MOE_ALIGN_KERNEL(1024);
-                    dispatched = true;
-                }
-            }
-            //baseline
-            if (!dispatched) {
-                auto align_kernel = moe_align_block_size_kernel<scalar_t>;
-                auto options_int = torch::TensorOptions()
-                                       .dtype(torch::kInt)
-                                       .device(topk_ids.device());
-                torch::Tensor cumsum_buffer =
-                    torch::zeros({num_experts + 1}, options_int);
-                size_t num_warps = CEILDIV(padded_num_experts, experts_per_warp);
-                size_t shared_mem_size =
-                    num_warps * experts_per_warp * sizeof(int32_t);
-
-                align_kernel<<<1, threads, shared_mem_size, stream>>>(
-                    topk_ids.data_ptr<scalar_t>(),
-                    sorted_token_ids.data_ptr<int32_t>(),
-                    experts_ids.data_ptr<int32_t>(),
-                    num_tokens_post_pad.data_ptr<int32_t>(), num_experts,
-                    padded_num_experts, experts_per_warp, block_size,
-                    topk_ids.numel(), cumsum_buffer.data_ptr<int32_t>(),
-                    expert_map.has_value() ? expert_map->data_ptr<int32_t>()
-                                           : nullptr);
-
-                const int block_threads = std::min(256, (int)threads);
-                const int num_blocks =
-                    (topk_ids.numel() + block_threads - 1) / block_threads;
-                const int max_blocks = 65535;
-                const int actual_blocks = std::min(num_blocks, max_blocks);
-
-                auto sort_kernel = count_and_sort_expert_tokens_kernel<scalar_t, 8>;
-                sort_kernel<<<actual_blocks, block_threads, 0, stream>>>(
-                    topk_ids.data_ptr<scalar_t>(),
-                    sorted_token_ids.data_ptr<int32_t>(),
-                    cumsum_buffer.data_ptr<int32_t>(), topk_ids.numel(),
-                    num_experts,
-                    num_local_tokens.has_value()
-                        ? num_local_tokens->data_ptr<int32_t>()
-                        : nullptr);
-            }
+          auto sort_kernel = count_and_sort_expert_tokens_kernel<scalar_t, 8>;
+          sort_kernel<<<actual_blocks, block_threads, 0, stream>>>(
+              topk_ids.data_ptr<scalar_t>(),
+              sorted_token_ids.data_ptr<int32_t>(),
+              cumsum_buffer.data_ptr<int32_t>(), topk_ids.numel(),
+              num_experts,
+              num_local_tokens_ptr);
         }
       });
 }
