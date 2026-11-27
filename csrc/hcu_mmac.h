@@ -59,37 +59,3 @@ using hcu_mmac_intx2 = int __attribute__((ext_vector_type(2)));
     __builtin_hcu_mmac_i32_16x16x32i8((a), (b), (c))
 
 #endif
-
-#if defined(__gfx946__)
-// ============================================================================
-// gfx946（少伯）原生 UE8M0 块缩放 MMAC 封装（ISA v1.8 §2.5.9 / §3.14.4）
-//
-// 1. Scale Buffer 硬件规格：每 CU 8 KB = 32 slots（1 slot = 256 B = 16 rows × 16 cols），
-//    每行存 16 个 8-bit E8M0 缩放因子（对应 16×16×32 MMAC 的 16 行 A 或 16 列 B）。
-// 2. M0 寄存器寻址约定（wave 私有）：
-//      - M0[8:0]   = ScaleA_row（A 块在 Scale Buffer 中的基行号，8-row/128B 对齐）
-//      - M0[24:16] = ScaleB_row（B 块在 Scale Buffer 中的基行号，8-row/128B 对齐）
-//    实际读取行号为 ScaleA_row + scale_a_offset、ScaleB_row + scale_b_offset。
-// 3. Data Hazard（ISA v1.8 §4.2.5）：
-//      - SALU 写 M0 后到下游读取 M0 需要 1 个 wait state，故显式插入 `s_nop 0`。
-//      - 注意：`ds_read_matrix_[trans_]format` 会覆写 M0 作为 LDS 地址指针，因此
-//        HCU_SET_SCALE_M0 必须在同拍所有 ds_read_matrix_* 发射完毕之后、
-//        v_mmac_scale_* 发射之前调用！
-// ============================================================================
-#define HCU_SET_SCALE_M0(row_a, row_b)                                          \
-    do {                                                                        \
-        int _hcu_scale_m0 = __builtin_amdgcn_readfirstlane(                     \
-            (((row_b) & 0x1FF) << 16) | ((row_a) & 0x1FF));                     \
-        asm volatile("s_mov_b32 m0, %0\n\ts_nop 0"                              \
-                     :: "s"(_hcu_scale_m0) : "memory");                         \
-    } while (0)
-
-// 硬件块缩放矩阵乘加：D.f32 = (A.fp8 * 2^(scaleA-127)) x (B.fp8 * 2^(scaleB-127)) + C.f32
-// - RealABTypeId = 0 对应 FP8_FP8（E4M3 x E4M3）
-// - lit = true, lts = false 时每 lane 持有同一行连续 4 列（row = lane&15, col = (lane>>4)*4+[0..3]），
-//   可直接合并向量写回，免 Epilogue LDS 转置
-// - off_a / off_b 为编译期常量（范围 [0, 31]），编码进指令 SOH.Scale_offset[9:0]
-#define HCU_MMAC_SCALE_F32_FP8_FP8(a, b, c, lit, lts, off_a, off_b)             \
-    __builtin_hcu_mmac_scale_f32_16x16x32_f8f6f4_lit_lts(                       \
-        (a), (b), (c), 0, (lit), (lts), (off_a), (off_b))
-#endif

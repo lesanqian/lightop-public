@@ -645,86 +645,31 @@ def hipblaslt_w8a8_blockwise_gemm(
         transpose_flag : str,
         out_dtype : torch.dtype,
         block_size : BlockSize,
-        bias : Optional[torch.Tensor] = None,
-        use_ue8m0 : bool = False) -> tuple[bool, torch.Tensor]:
-    """W8A8 块量化 GEMM 统一入口（支持 NN 与 NT 布局、batch >= 1、64x64 / 128x128 分块）。
-
-    派发策略：
-    1. gfx946 原生 UE8M0 快路径（`lightop_native.fp8_blockwise_gemm_ue8m0_gfx946`）：
-       - 仅在硬件与精度必需条件全部满足时触发：
-         `arch == "gfx946"`、显式开启 `use_ue8m0=True`（或环境变量
-         `LIGHTOP_GFX946_FP8_BLOCKWISE_UE8M0=1`）、输入为 `float8_e4m3fn`、
-         `block_size ∈ {128×128, 64×64}`、满足 MLS 16B 对齐约束（K/N 整除 16 且指针 16B 对齐）、
-         张量与 scale 连续且元素数与 `(batch, m, n, k)` 严格匹配（防止广播 2D/3D 混传越界）。
-       - 底层优先探测 `hsa/gfx946/gemm_w8a8_fp8_block/*.{co,so,hsaco}` 热插拔汇编，
-         无汇编时无缝执行内置 HIP `v_mmac_scale`（WASP / Lite + Split-K）核函数。
-    2. gfx936 / gfx946 安全回退路径：
-       - 当 `use_ue8m0=False`（任意 FP32 scale）、输入为 INT8、或 K/N 不满足 16B 对齐时，
-         执行精确的 PyTorch FP32 块反量化 + matmul（同步支持 NN 与 NT）。
-    3. 其余架构（gfx928 / gfx938 / gfx92a）：
-       - 维持既有 `hipblaslt_gemm_blockwise`（仅 NN）路径零回归。
-    """
-    assert transpose_flag in ('NN', 'NT')
+        bias : Optional[torch.Tensor] = None) -> tuple[bool, torch.Tensor]:
+    assert transpose_flag == 'NN'
     assert a.is_contiguous() and b.is_contiguous()
     assert scale_a.dtype is torch.float32 and scale_b.dtype is torch.float32
     assert out_dtype is torch.bfloat16 or out_dtype is torch.float16
     assert bias is None or bias.dtype == out_dtype
-    if transpose_flag == 'NN':
-        assert a.shape[-1] == b.shape[-2]
-    else:
-        assert a.shape[-1] == b.shape[-1]
+    assert a.shape[-1] == b.shape[-2]
 
-    import os
+
     arch = torch.cuda.get_device_properties(a.device).gcnArchName.split(":", 1)[0]
-    ue8m0_enabled = use_ue8m0 or os.environ.get("LIGHTOP_GFX946_FP8_BLOCKWISE_UE8M0", "0") == "1"
-
-    batch = a.shape[0] if a.dim() == 3 else 1
-    blk = 128 if block_size == BlockSize.block_128x128 else 64
-    k_blks = (k + blk - 1) // blk
-    n_blks = (n + blk - 1) // blk
-    if (
-        arch == "gfx946"
-        and ue8m0_enabled
-        and a.dtype is torch.float8_e4m3fn
-        and b.dtype is torch.float8_e4m3fn
-        and block_size in (BlockSize.block_128x128, BlockSize.block_64x64)
-        and k % 16 == 0
-        and n % 16 == 0
-        and (a.data_ptr() % 16 == 0)
-        and (b.data_ptr() % 16 == 0)
-        and scale_a.is_contiguous()
-        and scale_b.is_contiguous()
-        and a.numel() == batch * m * k
-        and b.numel() == batch * n * k
-        and scale_a.numel() == batch * m * k_blks
-        and scale_b.numel() == batch * k_blks * n_blks
-        and (bias is None or bias.numel() in (n, batch * n))
-    ):
-        res = lightop_native.fp8_blockwise_gemm_ue8m0_gfx946(
-            a, b, scale_a, scale_b, out_dtype, m, n, k, batch, transpose_flag, blk, bias
-        )
-        return True, res
-
     if arch in ("gfx936", "gfx946"):
         block_width = 128 if block_size == BlockSize.block_128x128 else 64
         k_blocks = torch.arange(k, device=a.device) // block_width
         n_blocks = torch.arange(n, device=a.device) // block_width
-        if transpose_flag == 'NN':
-            b_deq = b.float() * scale_b[..., k_blocks, :][..., n_blocks]
-        else:
-            b_deq = (b.float() * scale_b[..., n_blocks, :][..., k_blocks]).transpose(-2, -1)
-        res = (a.float() * scale_a[..., k_blocks]) @ b_deq
+        res = (a.float() * scale_a[..., k_blocks]) @ (
+            b.float() * scale_b[..., k_blocks, :][..., n_blocks]
+        )
         if arch == "gfx946":
             res = res.reshape(-1, m, n)
             if bias is not None:
                 bias = bias.reshape(-1, 1, n)
-        elif bias is not None and res.dim() == 3 and bias.dim() == 2 and bias.shape == (res.shape[0], n):
-            bias = bias.unsqueeze(-2)
         if bias is not None:
             res = res + bias.float()
         return True, res.to(out_dtype)
 
-    assert transpose_flag == 'NN'
     res = torch.ops.lmslim.hipblaslt_gemm_blockwise(
             b, a, scale_b, scale_a,
             out_dtype,
